@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spotify Duration Matcher</title>
+<style>
+:root{
+  --bg:#0d0f14;--surface:#161923;--s2:#1e2330;--s3:#252b3b;
+  --border:#2a3147;--border2:#374060;
+  --green:#1db954;--green-g:rgba(29,185,84,.14);
+  --red:#e63946;--red-g:rgba(230,57,70,.12);
+  --amber:#f4a261;--amber-g:rgba(244,162,97,.12);
+  --blue:#4f80ff;--blue-g:rgba(79,128,255,.12);
+  --text:#e2e8f0;--dim:#8892a4;--faint:#505a70;
+  --mono:'JetBrains Mono','Fira Code',monospace;
+  --sans:'Inter','Segoe UI',system-ui,sans-serif;
+  --r:8px;--rl:12px;--hh:54px;--sw:315px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.55}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* Header */
+header{position:fixed;top:0;left:0;right:0;z-index:200;height:var(--hh);
+  background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;padding:0 18px;overflow:hidden}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;
+  color:var(--text);text-decoration:none;flex-shrink:0;white-space:nowrap}
+.logo-dot{width:26px;height:26px;border-radius:50%;background:var(--green);
+  display:flex;align-items:center;justify-content:center;font-size:13px}
+#sb{flex:1;display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:11.5px;color:var(--dim);min-width:0}
+#st{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp{width:13px;height:13px;flex-shrink:0;border:2px solid var(--border2);
+  border-top-color:var(--green);border-radius:50%;
+  animation:spin .7s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Layout */
+.layout{display:flex;margin-top:var(--hh);height:calc(100vh - var(--hh))}
+.sidebar{width:var(--sw);flex-shrink:0;height:100%;overflow-y:auto;
+  background:var(--surface);border-right:1px solid var(--border);
+  padding:14px 12px 28px;display:flex;flex-direction:column;gap:10px}
+.main{flex:1;min-width:0;height:100%;overflow-y:auto;padding:16px 18px 32px;
+  display:flex;flex-direction:column;gap:14px}
+
+/* Cards */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:var(--rl);flex-shrink:0}
+.ch{padding:9px 13px;font-size:11px;font-weight:700;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);
+  border-radius:var(--rl) var(--rl) 0 0}
+.cb{padding:13px;display:flex;flex-direction:column;gap:9px}
+
+/* Drop zone */
+.dz{border:2px dashed var(--border2);border-radius:var(--r);padding:20px 12px;
+  text-align:center;cursor:pointer;position:relative;
+  transition:border-color .18s,background .18s;color:var(--dim)}
+.dz:hover,.dz.over{border-color:var(--green);background:var(--green-g)}
+.dz.got{border-color:var(--green);border-style:solid;background:var(--green-g)}
+.dz input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.dz-icon{font-size:24px;margin-bottom:5px}
+.dz-lbl{font-size:12.5px;font-weight:500}
+.dz-hint{font-size:11px;color:var(--faint);margin-top:2px}
+.dz-chosen{font-family:var(--mono);font-size:11px;color:var(--green);
+  margin-top:5px;font-weight:600;word-break:break-all}
+
+/* Form */
+.fl{display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.4px;color:var(--dim);margin-bottom:4px}
+input[type=text],input[type=number],select{
+  width:100%;background:var(--s3);border:1px solid var(--border);border-radius:6px;
+  padding:7px 10px;color:var(--text);font-family:var(--mono);font-size:12px;
+  outline:none;transition:border-color .15s}
+input[type=text]:focus,input[type=number]:focus,select:focus{border-color:var(--green)}
+select option{background:var(--s3)}
+
+.sr{display:flex;align-items:center;gap:9px}
+input[type=range]{flex:1;accent-color:var(--green);cursor:pointer}
+.sv{display:inline-block;font-family:var(--mono);font-size:14px;font-weight:700;color:var(--green);min-width:28px;text-align:right}
+
+/* Toggle */
+.tr{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;
+    font-size:12.5px;flex-wrap:nowrap;min-height:24px}
+.tog{display:inline-block;position:relative;width:34px;height:18px;flex-shrink:0;vertical-align:middle}
+.tog input{opacity:0;width:0;height:0}
+.tt{position:absolute;inset:0;background:var(--border2);border-radius:9px;transition:background .2s;cursor:pointer}
+.tb{position:absolute;width:12px;height:12px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .2s;pointer-events:none}
+.tog input:checked~.tt{background:var(--green)}
+.tog input:checked~.tt .tb{transform:translateX(16px)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 13px;
+  border-radius:6px;border:none;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:opacity .15s,transform .1s,background .15s;text-decoration:none;
+  text-align:center;line-height:1.3}
+.btn:active{transform:scale(.97)}
+.btn:disabled,.btn.disabled{opacity:.38;cursor:not-allowed;pointer-events:none}
+.btn-p{background:var(--green);color:#000;font-size:14px;padding:11px 16px}
+.btn-p:hover:not(:disabled){background:#22d560}
+.btn-s{background:var(--s3);color:var(--text);border:1px solid var(--border2)}
+.btn-s:hover:not(:disabled){border-color:var(--green)}
+.btn-d{background:var(--red);color:#fff}
+.btn-full{width:100%}
+.btn-sm{padding:4px 9px;font-size:11.5px}
+.br{display:flex;gap:7px}
+.br .btn{flex:1;min-width:0;font-size:11.5px;padding:7px 8px}
+.ar{display:flex;gap:7px}
+.ar .btn{flex:1;min-width:0;padding:7px 8px}
+
+/* Upload status */
+#us{background:var(--s3);border:1px solid var(--border);border-radius:6px;
+  padding:6px 10px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.ubw{height:3px;background:var(--border);border-radius:2px;margin-top:4px}
+.ub{height:3px;background:var(--green);border-radius:2px;width:0;transition:width .3s}
+.ord{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--faint)}
+.ord::before,.ord::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* Summary pills */
+.summary{display:flex;gap:10px;flex-wrap:wrap}
+.pill{display:flex;align-items:center;gap:12px;
+  background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:11px 16px;
+  cursor:pointer;transition:border-color .15s,background .15s,transform .1s;user-select:none}
+.pill:hover{border-color:var(--border2);background:var(--s3)}
+.pill:active{transform:scale(.97)}
+.pill.active{border-color:var(--green)!important;background:var(--green-g)!important}
+.pn{font-family:var(--mono);font-size:24px;font-weight:700;line-height:1}
+.pl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--dim)}
+.p-ok .pn{color:var(--green)}.p-bad .pn{color:var(--red)}.p-warn .pn{color:var(--amber)}.p-dim .pn{color:var(--dim)}
+
+/* Filter bar */
+.fbar{display:flex;gap:3px;align-items:center;background:var(--s2);
+  border:1px solid var(--border);border-radius:var(--r);padding:4px;width:fit-content}
+.ftab{padding:5px 13px;border-radius:5px;border:none;font-size:12px;font-weight:600;
+  cursor:pointer;background:transparent;color:var(--dim);transition:background .15s,color .15s}
+.ftab:hover{background:var(--s3);color:var(--text)}
+.ftab.active{background:var(--s3);color:var(--text);box-shadow:0 0 0 1px var(--border2)}
+.tc{font-size:10px;font-family:var(--mono);background:var(--s3);border-radius:8px;padding:1px 5px;margin-left:3px}
+.ftab.active .tc{background:var(--border2)}
+
+/* Table */
+.tw{overflow-x:auto;border-radius:var(--r);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:860px}
+thead th{position:sticky;top:0;z-index:10;background:var(--s2);padding:9px 10px;
+  text-align:left;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--dim);border-bottom:1px solid var(--border);white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:var(--s3)}
+tbody td{padding:8px 10px;vertical-align:middle}
+.row-ok td:first-child{border-left:3px solid var(--green)}
+.row-bad td:first-child{border-left:3px solid var(--red)}
+.row-warn td:first-child{border-left:3px solid var(--amber)}
+.mono{font-family:var(--mono)}.dim{color:var(--dim)}
+
+.flag-badge{background:var(--red-g);color:var(--red);border:1px solid rgba(230,57,70,.4);
+  border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700}
+
+/* Score / accuracy */
+.acc{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px}
+.acc-hi{background:var(--green-g);color:var(--green)}
+.acc-mid{background:var(--amber-g);color:var(--amber)}
+.acc-lo{background:var(--red-g);color:var(--red)}
+
+.sbadge{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.s-ok{background:var(--green-g);color:var(--green)}
+.s-mis{background:var(--red-g);color:var(--red)}
+.s-unm{background:var(--amber-g);color:var(--amber)}
+.s-man{background:var(--blue-g);color:var(--blue)}
+.s-err{background:var(--red-g);color:var(--red)}
+.s-inf{background:var(--s3);color:var(--dim)}
+
+.fn{max-width:190px;font-family:var(--mono);font-size:11px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:block;cursor:pointer;transition:color .15s}
+.fn:hover{color:var(--green);text-decoration:underline}
+
+/* Unmatched files section */
+.unm-section{margin-top:4px}
+.unm-head{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  background:var(--s2);border:1px solid var(--border);border-radius:var(--r);
+  cursor:pointer;user-select:none;transition:background .15s}
+.unm-head:hover{background:var(--s3)}
+.unm-title{font-size:12.5px;font-weight:700;flex:1}
+.unm-count{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--amber);
+  background:var(--amber-g);padding:2px 8px;border-radius:10px}
+.unm-body{border:1px solid var(--border);border-top:none;
+  border-radius:0 0 var(--r) var(--r);overflow:hidden}
+.unm-row{display:flex;align-items:center;gap:10px;padding:8px 14px;
+  border-bottom:1px solid var(--border);background:var(--surface)}
+.unm-row:last-child{border-bottom:none}
+.unm-row:hover{background:var(--s2)}
+.unm-fn{flex:1;font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.unm-dur{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0;min-width:50px;text-align:right}
+.unm-empty{padding:20px;text-align:center;color:var(--faint);font-size:12px}
+
+/* Empty state */
+.empty{text-align:center;padding:70px 20px;color:var(--faint)}
+.empty .ei{font-size:44px;margin-bottom:12px}
+
+/* Modals */
+.ov{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.65);
+  display:flex;align-items:center;justify-content:center}
+.panel{background:var(--s2);border:1px solid var(--border2);border-radius:var(--rl);
+  width:min(520px,93vw);max-height:82vh;overflow-y:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.ph{padding:14px 18px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+  position:sticky;top:0;background:var(--s2);z-index:1}
+.ph h3{font-size:13.5px;font-weight:700}
+.pb{padding:16px 18px}
+.pt{font-size:12px;color:var(--dim);margin-bottom:14px}
+
+.modal-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.65);
+  display:flex;align-items:center;justify-content:center}
+.modal-box{background:var(--s2);border:1px solid var(--border2);border-radius:var(--rl);
+  width:min(500px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.mh{padding:14px 18px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center}
+.mh h3{font-size:13px;font-weight:700}
+.mb{padding:18px}
+.mp{background:var(--s3);border:1px solid var(--border);border-radius:6px;
+  padding:11px 13px;font-family:var(--mono);font-size:11.5px;
+  word-break:break-all;color:var(--text);line-height:1.65;margin-bottom:12px;user-select:all}
+.cc{font-size:11px;color:var(--green);margin-left:8px;display:none}
+
+.cl{list-style:none;display:flex;flex-direction:column;gap:6px}
+.ci{display:flex;align-items:center;gap:10px;border:1px solid var(--border);
+  border-radius:7px;padding:9px 12px;cursor:pointer;transition:border-color .15s,background .15s}
+.ci:hover{border-color:var(--green);background:var(--green-g)}
+.cs{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--green);min-width:32px;font-weight:700}
+.cn{flex:1;font-size:11.5px;word-break:break-all}
+.cd{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
+
+/* Assign modal */
+#assign-modal .arow{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+#assign-modal select{flex:1}
+
+@media(max-width:760px){
+  .layout{flex-direction:column;height:auto}
+  .sidebar{width:100%;height:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .main{height:auto}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="/"><div class="logo-dot">♬</div>Duration Matcher</a>
+  <div id="sb"><div class="sp" id="spinner"></div><span id="st">Load a CSV and choose an audio source, then click Analyse.</span></div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+
+    <!-- Sheet source -->
+    <div class="card">
+      <div class="ch">📋 Sheet Source</div>
+      <div class="cb">
+        <div>
+          <label class="fl">CSV Export — primary (drag &amp; drop)</label>
+          <div class="dz" id="csv-zone">
+            <input type="file" id="csv-input" accept=".csv">
+            <div class="dz-icon" id="dz-i">📄</div>
+            <div class="dz-lbl" id="dz-l">Drop your Google Sheet CSV here</div>
+            <div class="dz-hint" id="dz-h">File → Download → Comma Separated Values</div>
+            <div class="dz-chosen" id="csv-chosen" style="display:none"></div>
+          </div>
+        </div>
+        <div class="ord">or use live sheet</div>
+        <div>
+          <label class="fl">Google Sheet ID</label>
+          <input type="text" id="sheet-id" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74…">
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio source -->
+    <div class="card">
+      <div class="ch">🎵 Audio Source</div>
+      <div class="cb">
+        <div><label class="fl">Folder path</label>
+          <input type="text" id="audio-dir" placeholder="C:\Users\You\Music"></div>
+        <div class="br">
+          <button class="btn btn-s" id="btn-bf">📁 Folder</button>
+          <button class="btn btn-s" id="btn-fi">🎵 Files</button>
+        </div>
+        <input type="file" id="fi-folder" style="display:none" multiple>
+        <input type="file" id="fi-files"  style="display:none" multiple
+               accept="audio/*,.mp3,.flac,.wav,.aac,.m4a,.ogg,.opus,.wma,.ape,.aiff">
+        <div id="us" style="display:none">
+          <span id="um">Uploading…</span>
+          <div class="ubw"><div class="ub" id="upb"></div></div>
+        </div>
+        <label class="tr">
+          <span class="tog"><input type="checkbox" id="recursive" checked><div class="tt"><div class="tb"></div></div></span>
+          Scan subdirectories
+        </label>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="card">
+      <div class="ch">⚙ Options</div>
+      <div class="cb">
+        <div>
+          <label class="fl">Match threshold</label>
+          <div class="sr"><input type="range" id="threshold" min="0" max="100" value="55">
+            <span class="sv" id="tv">55</span></div>
+        </div>
+        <div>
+          <label class="fl">Duration tolerance (seconds)</label>
+          <input type="number" id="tolerance" value="1.0" min="0" step="0.1" style="width:110px">
+        </div>
+        <label class="tr">
+          <span class="tog"><input type="checkbox" id="microsec-tog"><div class="tt"><div class="tb"></div></div></span>
+          <span>Microsecond Compare&nbsp;<span style="color:var(--faint);font-size:11px">(3:42.54)</span></span>
+        </label>
+        <div>
+          <label class="fl">Rename Format</label>
+          <select id="fmt-select">
+            <option value="001 - Title - Artist">001 - Title - Artist</option>
+            <option value="001 - Artist - Title">001 - Artist - Title</option>
+            <option value="Title - Artist">Title - Artist</option>
+            <option value="Artist - Title">Artist - Title</option>
+            <option value="001 - Title">001 - Title</option>
+            <option value="001 - Artist">001 - Artist</option>
+            <option value="Title">Title only</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input type="text" id="fmt-custom" placeholder="{idx:03d} - {title} - {artist}{ext}"
+                 style="display:none;margin-top:6px">
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-p btn-full" id="btn-analyse">▶  Analyse</button>
+    <div class="ar">
+      <button class="btn btn-s" id="btn-rename" disabled>✏ Rename</button>
+      <button class="btn btn-s disabled" id="btn-report">⬇ Report</button>
+    </div>
+    <button class="btn btn-s btn-full disabled" id="btn-download-zip" style="margin-top:7px">
+      ⬇ Download Renamed Files (.zip)
+    </button>
+
+  </aside>
+
+  <main class="main">
+
+    <!-- Summary pills -->
+    <div class="summary" id="summary" style="display:none">
+      <div class="pill p-dim"  data-filter="all">
+        <div><div class="pn" id="s-total">0</div><div class="pl">Total</div></div>
+      </div>
+      <div class="pill p-ok"   data-filter="matched">
+        <div><div class="pn" id="s-matched">0</div><div class="pl">Matched</div></div>
+      </div>
+      <div class="pill p-bad"  data-filter="mismatched">
+        <div><div class="pn" id="s-mismatch">0</div><div class="pl">Mismatched &gt;1s</div></div>
+      </div>
+      <div class="pill p-warn" data-filter="unmatched">
+        <div><div class="pn" id="s-unmatched">0</div><div class="pl">Unmatched</div></div>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="fbar" id="filter-bar" style="display:none">
+      <button class="ftab active" data-filter="all">All <span class="tc" id="tc-all">0</span></button>
+      <button class="ftab" data-filter="matched">Matched <span class="tc" id="tc-matched">0</span></button>
+      <button class="ftab" data-filter="mismatched">Mismatched <span class="tc" id="tc-mis">0</span></button>
+      <button class="ftab" data-filter="unmatched">Unmatched <span class="tc" id="tc-unm">0</span></button>
+    </div>
+
+    <!-- Results table -->
+    <div id="results-area" style="flex:1">
+      <div class="empty"><div class="ei">🎵</div><p>Results appear here after analysis.</p></div>
+    </div>
+
+    <!-- Unmatched audio files -->
+    <div class="unm-section" id="unm-section" style="display:none">
+      <div class="unm-head" id="unm-toggle">
+        <span class="unm-title">🎵 Unmatched Audio Files</span>
+        <span class="unm-count" id="unm-count">0</span>
+        <span id="unm-chevron" style="color:var(--dim);font-size:11px">▼</span>
+      </div>
+      <div id="unm-body" class="unm-body" style="display:none"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- File-path modal -->
+<div class="modal-overlay" id="file-modal" style="display:none">
+  <div class="modal-box">
+    <div class="mh"><h3>Full File Path</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-modal">✕</button></div>
+    <div class="mb">
+      <div class="mp" id="modal-path"></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-s btn-sm" id="btn-copy">📋 Copy Path</button>
+        <span class="cc" id="cc">✓ Copied!</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reassign overlay -->
+<div class="ov" id="rov" style="display:none">
+  <div class="panel">
+    <div class="ph"><h3>Reassign File</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-rov">✕</button></div>
+    <div class="pb">
+      <p class="pt" id="rov-track"></p>
+      <ul class="cl" id="cand-list"></ul>
+      <p id="cand-empty" style="display:none;color:var(--faint);font-size:12px">No candidates found.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Assign-unmatched modal -->
+<div class="modal-overlay" id="assign-modal" style="display:none">
+  <div class="modal-box" id="assign-modal">
+    <div class="mh"><h3>Assign to Sheet Row</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-assign">✕</button></div>
+    <div class="mb">
+      <p style="font-size:12px;color:var(--dim);margin-bottom:12px" id="assign-file-name"></p>
+      <div class="arow">
+        <label style="font-size:12px;color:var(--dim);flex-shrink:0">Assign to:</label>
+        <select id="assign-row-select"></select>
+      </div>
+      <button class="btn btn-p btn-full" id="btn-confirm-assign" style="margin-top:12px">✓ Confirm Assignment</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Session ────────────────────────────────────────────────────────── */
+let SID = localStorage.getItem('sdm_sid');
+if (!SID) {
+  SID = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  localStorage.setItem('sdm_sid', SID);
+}
+const H = { 'X-Session-Id': SID };
+
+/* ── State ──────────────────────────────────────────────────────────── */
+let allResults   = [];
+let unmatchedAudio = [];
+let activeFilter = 'all';
+let activeReassignRow = null;
+let pendingAssignFile = null;
+let csvFile = null;
+let uploadedDir = '';
+
+/* ── Refs ───────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const getMicro  = () => $('microsec-tog').checked;
+const getTol = () => {
+  const v = parseFloat($('tolerance').value);
+  return isNaN(v) ? 1.0 : v;   // only fall back on invalid input, never on 0
+};
+
+/* ── Status ─────────────────────────────────────────────────────────── */
+function setStatus(msg, loading=false) {
+  $('spinner').style.display = loading ? 'block' : 'none';
+  $('st').textContent = msg;
+}
+
+/* ── Duration helpers ───────────────────────────────────────────────── */
+function fmtDur(sec) {
+  if (sec == null) return '—';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return getMicro() ? `${m}:${s.toFixed(2).padStart(5,'0')}` : `${m}:${String(Math.floor(s)).padStart(2,'0')}`;
+}
+
+/* Effective diff for display — uses floor when microsecond compare is OFF */
+function effDiff(r) {
+  if (r.diff == null) return null;
+  if (getMicro()) return r.diff;
+  if (r.file_dur != null && r.spotify_dur != null)
+    return Math.floor(r.file_dur) - Math.floor(r.spotify_dur);
+  return Math.round(r.diff);
+}
+
+function fmtDiff(r) {
+  const d = effDiff(r);
+  if (d == null) return 'N/A';
+  return (d >= 0 ? '+' : '') + (getMicro() ? d.toFixed(2)+'s' : d+'s');
+}
+
+/* Effective flag — recomputed client-side on toggle */
+function effFlag(r) {
+  const d = effDiff(r);
+  if (d == null) return false;
+  return Math.abs(d) > getTol();
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────── */
+function accClass(s) { return s>=90?'acc-hi':s>=65?'acc-mid':'acc-lo'; }
+function rowClass(r) {
+  if (r.status==='UNMATCHED') return 'row-warn';
+  if (effFlag(r)||r.status==='MISMATCH'||r.status==='READ_ERROR') return 'row-bad';
+  return 'row-ok';
+}
+function sBadge(r) {
+  const map={OK:'s-ok',MISMATCH:'s-mis',UNMATCHED:'s-unm',MANUAL:'s-man',READ_ERROR:'s-err',INFO_ONLY:'s-inf'};
+  return `<span class="sbadge ${map[r.status]||'s-inf'}">${esc(r.status)}</span>`;
+}
+function bn(p){ return p ? p.replace(/\\/g,'/').split('/').pop() : '—'; }
+
+/* ── Filter logic ───────────────────────────────────────────────────── */
+function cntFor(f) {
+  if (f==='all')        return allResults.length;
+  if (f==='matched')    return allResults.filter(r=>r.status!=='UNMATCHED').length;
+  if (f==='mismatched') return allResults.filter(r=>effFlag(r)).length;
+  if (f==='unmatched')  return allResults.filter(r=>r.status==='UNMATCHED').length;
+  return 0;
+}
+function applyFilter(rows) {
+  if (activeFilter==='matched')    return rows.filter(r=>r.status!=='UNMATCHED');
+  if (activeFilter==='mismatched') return rows.filter(r=>effFlag(r));
+  if (activeFilter==='unmatched')  return rows.filter(r=>r.status==='UNMATCHED');
+  return rows;
+}
+function setFilter(f) {
+  activeFilter = f;
+  document.querySelectorAll('.ftab').forEach(t=>t.classList.toggle('active',t.dataset.filter===f));
+  document.querySelectorAll('.pill').forEach(p=>p.classList.toggle('active',p.dataset.filter===f));
+  renderTable(applyFilter(allResults));
+}
+
+/* ── Summary ────────────────────────────────────────────────────────── */
+function renderSummary() {
+  const n=allResults.length, m=cntFor('matched'), mis=cntFor('mismatched'), u=cntFor('unmatched');
+  $('s-total').textContent   = n;
+  $('s-matched').textContent = m;
+  $('s-mismatch').textContent= mis;
+  $('s-unmatched').textContent=u;
+  $('tc-all').textContent    = n;
+  $('tc-matched').textContent= m;
+  $('tc-mis').textContent    = mis;
+  $('tc-unm').textContent    = u;
+  $('summary').style.display    = 'flex';
+  $('filter-bar').style.display = 'flex';
+}
+
+/* ── Table render ───────────────────────────────────────────────────── */
+function renderTable(rows) {
+  const area = $('results-area');
+  if (!rows.length) {
+    area.innerHTML='<div class="empty"><div class="ei">🔍</div><p>No rows match this filter.</p></div>';
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.className='tw';
+  const t=document.createElement('table');
+  t.innerHTML=`<thead><tr>
+    <th>#</th><th>Track Title</th><th>Artist</th>
+    <th>Spotify</th><th>File</th><th>Diff</th>
+    <th>&gt;1s</th><th>Accuracy</th><th>Status</th>
+    <th>Matched File</th><th></th>
+  </tr></thead><tbody id="tbody"></tbody>`;
+  wrap.appendChild(t);
+  area.innerHTML='';
+  area.appendChild(wrap);
+
+  const tbody=$('tbody');
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.className=rowClass(r);
+    const fp=r.matched_file||'', fname=r.matched_filename||bn(fp);
+    const score=r.match_score||0;
+    const flag=effFlag(r);
+    tr.innerHTML=`
+      <td class="mono dim">${r.sheet_row}</td>
+      <td>${esc(r.track_title)}</td>
+      <td class="dim">${esc(r.artist_name)}</td>
+      <td class="mono">${fmtDur(r.spotify_dur)}</td>
+      <td class="mono">${fmtDur(r.file_dur)}</td>
+      <td class="mono">${fmtDiff(r)}</td>
+      <td>${flag?'<span class="flag-badge">YES</span>':''}</td>
+      <td><span class="acc ${accClass(score)}">${score}%</span></td>
+      <td>${sBadge(r)}</td>
+      <td><span class="fn" title="${esc(fp)}" data-fp="${esc(fp)}">${esc(fname)}</span></td>
+      <td><button class="btn btn-s btn-sm btn-ra" data-row="${r.sheet_row}"
+            data-title="${esc(r.track_title)}" data-artist="${esc(r.artist_name)}">✏</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('.fn').forEach(c=>c.addEventListener('click',()=>showFileModal(c.dataset.fp)));
+  tbody.querySelectorAll('.btn-ra').forEach(b=>b.addEventListener('click',()=>
+    openReassign(+b.dataset.row,b.dataset.title,b.dataset.artist)));
+}
+
+/* ── Unmatched audio section ────────────────────────────────────────── */
+function renderUnmatched(files) {
+  unmatchedAudio = files;
+  const sec=$('unm-section');
+  $('unm-count').textContent=files.length;
+  sec.style.display = files.length ? 'block' : 'none';
+
+  const body=$('unm-body');
+  if (!files.length) { body.innerHTML=''; return; }
+
+  if (!files.length) { body.innerHTML='<div class="unm-empty">All audio files were matched.</div>'; return; }
+
+  body.innerHTML='';
+  files.forEach(f=>{
+    const row=document.createElement('div');
+    row.className='unm-row';
+    row.innerHTML=`
+      <span class="unm-fn" title="${esc(f.path)}">${esc(f.filename)}</span>
+      <span class="unm-dur">${fmtDurPlain(f.duration)}</span>
+      <button class="btn btn-s btn-sm btn-assign"
+        data-path="${esc(f.path)}" data-fname="${esc(f.filename)}">Assign ›</button>`;
+    row.querySelector('.btn-assign').addEventListener('click', ()=>openAssign(f.path, f.filename));
+    body.appendChild(row);
+  });
+}
+
+function fmtDurPlain(sec) {
+  if (sec==null) return '—';
+  const m=Math.floor(sec/60), s=Math.floor(sec%60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+/* Toggle unmatched section */
+$('unm-toggle').addEventListener('click',()=>{
+  const body=$('unm-body');
+  const open=body.style.display!=='none';
+  body.style.display=open?'none':'block';
+  $('unm-chevron').textContent=open?'▼':'▲';
+});
+
+/* ── Full render ────────────────────────────────────────────────────── */
+function renderResults(data) {
+  allResults = data.results || [];
+  renderSummary();
+  setFilter('all');
+  renderUnmatched(data.unmatched_files || []);
+}
+
+/* ── Precision toggle re-render ─────────────────────────────────────── */
+$('microsec-tog').addEventListener('change',()=>{
+  if (!allResults.length) return;
+  renderSummary();
+  renderTable(applyFilter(allResults));
+});
+
+/* ── CSV drag-drop ──────────────────────────────────────────────────── */
+const cz=$('csv-zone'), ci=$('csv-input');
+cz.addEventListener('dragover',e=>{e.preventDefault();cz.classList.add('over')});
+cz.addEventListener('dragleave',()=>cz.classList.remove('over'));
+cz.addEventListener('drop',e=>{
+  e.preventDefault();cz.classList.remove('over');
+  const f=e.dataTransfer.files[0];
+  if(f&&(f.name.endsWith('.csv')||f.type==='text/csv'))setCSV(f);
+  else setStatus('⚠ Please drop a .csv file.');
+});
+ci.addEventListener('change',()=>{if(ci.files[0])setCSV(ci.files[0])});
+function setCSV(f){
+  csvFile=f;cz.classList.add('got');
+  $('dz-i').style.display=$('dz-l').style.display=$('dz-h').style.display='none';
+  const c=$('csv-chosen');c.style.display='block';c.textContent='✓  '+f.name;
+  setStatus('CSV loaded: '+f.name);
+}
+
+/* ── Threshold slider ───────────────────────────────────────────────── */
+$('threshold').addEventListener('input',function(){$('tv').textContent=this.value});
+
+/* ── Rename format toggle ───────────────────────────────────────────── */
+$('fmt-select').addEventListener('change',function(){
+  $('fmt-custom').style.display=this.value==='custom'?'block':'none';
+});
+
+/* ── Filter pills & tabs ────────────────────────────────────────────── */
+document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>setFilter(p.dataset.filter)));
+document.querySelectorAll('.ftab').forEach(t=>t.addEventListener('click',()=>setFilter(t.dataset.filter)));
+
+/* ── Audio browse + upload ──────────────────────────────────────────── */
+const fif=$('fi-folder'),fii=$('fi-files');
+fif.setAttribute('webkitdirectory','');
+$('btn-bf').addEventListener('click',()=>fif.click());
+$('btn-fi').addEventListener('click',()=>fii.click());
+fif.addEventListener('change',()=>handleFiles(fif.files));
+fii.addEventListener('change',()=>handleFiles(fii.files));
+
+async function handleFiles(list){
+  if(!list||!list.length)return;
+  const exts=new Set(['.mp3','.flac','.wav','.aac','.m4a','.ogg','.opus','.wma','.ape','.aiff','.alac']);
+  const audio=Array.from(list).filter(f=>exts.has('.'+f.name.split('.').pop().toLowerCase()));
+  if(!audio.length){setStatus('No audio files found in selection.');return}
+  $('us').style.display='block';$('um').textContent=`Uploading ${audio.length} files…`;
+  $('upb').style.width='0%';setStatus(`Uploading ${audio.length} files…`,true);
+  const fd=new FormData();audio.forEach(f=>fd.append('audio_files',f,f.name));
+  try{
+    const res=await new Promise((ok,fail)=>{
+      const xhr=new XMLHttpRequest();
+      xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable)$('upb').style.width=Math.round(e.loaded/e.total*100)+'%'});
+      xhr.onload=()=>ok(JSON.parse(xhr.responseText));xhr.onerror=fail;
+      xhr.open('POST','/api/upload-audio');
+      Object.entries(H).forEach(([k,v])=>xhr.setRequestHeader(k,v));
+      xhr.send(fd);
+    });
+    if(res.error)throw new Error(res.error);
+    uploadedDir=res.audio_dir;$('audio-dir').value=res.audio_dir;
+    $('upb').style.width='100%';$('um').textContent=`✓ ${res.file_count} files ready`;
+    setStatus(`${res.file_count} audio files ready.`);
+  }catch(e){setStatus('Upload failed: '+e.message);$('um').textContent='✗ '+e.message;}
+  finally{$('spinner').style.display='none'}
+}
+
+/* ── File download via fetch+blob ──────────────────────────────────────
+   Plain <a href> navigation cannot send the X-Session-Id header, so any
+   session-scoped download MUST go through fetch() + Blob instead — this
+   is the only way the server can find the right session's data. ──────── */
+async function downloadViaFetch(url, fallbackName, button) {
+  const original = button ? button.textContent : null;
+  if (button) { button.disabled = true; button.textContent = '⏳ Preparing…'; }
+  setStatus('Preparing download…', true);
+  try {
+    const res = await fetch(url, { headers: H });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    let filename = fallbackName;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const m = disposition.match(/filename="?([^";]+)"?/);
+    if (m) filename = m[1];
+
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    setStatus(`✓ Downloaded ${filename}`);
+  } catch (e) {
+    setStatus('Download failed: ' + e.message);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = original; }
+    $('spinner').style.display = 'none';
+  }
+}
+
+$('btn-report').addEventListener('click', () => {
+  downloadViaFetch('/api/report', 'duration_report.csv', $('btn-report'));
+});
+
+$('btn-download-zip').addEventListener('click', () => {
+  downloadViaFetch('/api/download-renamed-zip', 'renamed_audio.zip', $('btn-download-zip'));
+});
+
+/* ── Analyse ────────────────────────────────────────────────────────── */
+$('btn-analyse').addEventListener('click',async()=>{
+  const sid=$('sheet-id').value.trim();
+  const dir=$('audio-dir').value.trim()||uploadedDir;
+  const rec=$('recursive').checked;
+  const thr=+$('threshold').value;
+  const tol=getTol();
+  const mic=getMicro();
+  if(!csvFile&&!sid){setStatus('⚠ Drop a CSV or enter a Sheet ID first.');return}
+  if(!dir){setStatus('⚠ Enter a folder path or select audio files.');return}
+  $('btn-analyse').disabled=true;
+  setStatus('Running analysis…',true);
+  $('summary').style.display=$('filter-bar').style.display='none';
+  $('btn-download-zip').classList.add('disabled');
+  try{
+    let res;
+    if(csvFile){
+      const fd=new FormData();
+      fd.append('csv_file',csvFile,csvFile.name);
+      fd.append('audio_dir',dir);fd.append('recursive',rec);
+      fd.append('threshold',thr);fd.append('tolerance',tol);
+      fd.append('use_microseconds',mic);
+      res=await fetch('/api/analyse-csv',{method:'POST',headers:H,body:fd});
+    }else{
+      res=await fetch('/api/analyse',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+        body:JSON.stringify({sheet_id:sid,audio_dir:dir,recursive:rec,threshold:thr,tolerance:tol,use_microseconds:mic})});
+    }
+    const data=await res.json();
+    if(!res.ok||data.error){setStatus('Error: '+(data.error||res.statusText));return}
+    renderResults(data);
+    const n=data.results.length;
+    setStatus(`Done — ${n} tracks · ${cntFor('matched')} matched · ${cntFor('mismatched')} mismatched · ${cntFor('unmatched')} unmatched`);
+    $('btn-rename').disabled=false;
+    $('btn-report').classList.remove('disabled');
+  }catch(e){setStatus('Network error: '+e.message);}
+  finally{$('btn-analyse').disabled=false;$('spinner').style.display='none'}
+});
+
+/* ── Rename ─────────────────────────────────────────────────────────── */
+$('btn-rename').addEventListener('click',async()=>{
+  const fmt=$('fmt-select').value;
+  const custom=$('fmt-custom').value.trim();
+  const label=fmt==='custom'?'custom format':fmt;
+  if(fmt==='custom'&&!custom){setStatus('⚠ Enter a custom template first.');return}
+  if(!confirm(`Rename matched files using: ${label}?`))return;
+  setStatus('Renaming…',true);$('btn-rename').disabled=true;
+  try{
+    const res=await fetch('/api/rename',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({format_name:fmt,custom_template:fmt==='custom'?custom:''})});
+    const data=await res.json();
+    if(data.error){setStatus('Rename error: '+data.error);return}
+    renderResults(data);
+    const st=data.rename_stats||{};
+    const renamed=st.renamed||0, same=st.skipped_same_name||0,
+          notFound=st.skipped_not_found||0, destExists=st.skipped_dest_exists||0,
+          errs=(st.errors||[]).length;
+
+    const anyDownloadable = allResults.some(r => r.matched_file);
+    if (anyDownloadable) $('btn-download-zip').classList.remove('disabled');
+
+    if(renamed===0 && (notFound>0||destExists>0||errs>0)){
+      const reasons=[];
+      if(notFound>0)   reasons.push(`${notFound} file(s) not found on disk`);
+      if(destExists>0) reasons.push(`${destExists} name collision(s)`);
+      if(errs>0)       reasons.push(`${errs} error(s)`);
+      setStatus(`⚠ 0 files renamed — ${reasons.join(', ')}.`);
+    }else if(renamed===0 && same>0){
+      setStatus(`Already correctly named. Use "Download Renamed Files" to get them.`);
+    }else{
+      let msg=`✓ ${renamed} file(s) renamed. Click "Download Renamed Files" to get them.`;
+      if(same>0)       msg+=` (${same} already correct.)`;
+      if(notFound>0)   msg+=` ${notFound} not found.`;
+      if(destExists>0) msg+=` ${destExists} skipped (collision).`;
+      setStatus(msg);
+    }
+  }catch(e){setStatus('Rename failed: '+e.message);}
+  finally{$('btn-rename').disabled=false;$('spinner').style.display='none'}
+});
+
+/* ── File-path modal ────────────────────────────────────────────────── */
+function showFileModal(path){
+  if(!path)return;$('modal-path').textContent=path;
+  $('cc').style.display='none';$('file-modal').style.display='flex';
+}
+$('btn-close-modal').addEventListener('click',()=>$('file-modal').style.display='none');
+$('file-modal').addEventListener('click',e=>{if(e.target===$('file-modal'))$('file-modal').style.display='none'});
+$('btn-copy').addEventListener('click',()=>{
+  navigator.clipboard.writeText($('modal-path').textContent).then(()=>{
+    const c=$('cc');c.style.display='inline';setTimeout(()=>c.style.display='none',2000);
+  });
+});
+
+/* ── Reassign overlay ───────────────────────────────────────────────── */
+async function openReassign(row,title,artist){
+  activeReassignRow=row;
+  $('rov-track').textContent=`${title}  ·  ${artist}`;
+  $('cand-list').innerHTML='<li style="color:var(--faint);font-size:12px;padding:8px 0">Searching…</li>';
+  $('cand-empty').style.display='none';$('rov').style.display='flex';
+  try{
+    const res=await fetch('/api/candidates',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:row,top_n:5})});
+    const data=await res.json();
+    const list=$('cand-list');list.innerHTML='';
+    if(!data.candidates||!data.candidates.length){$('cand-empty').style.display='block';return}
+    data.candidates.forEach(c=>{
+      const li=document.createElement('li');li.className='ci';li.title=c.path;
+      li.innerHTML=`<span class="cs">${c.score}%</span><span class="cn">${esc(bn(c.path))}</span><span class="cd">${fmtDurPlain(c.duration)}</span>`;
+      li.addEventListener('click',()=>doReassign(c.path));
+      list.appendChild(li);
+    });
+  }catch(e){$('cand-list').innerHTML=`<li style="color:var(--red)">${esc(e.message)}</li>`}
+}
+async function doReassign(fp){
+  $('rov').style.display='none';setStatus('Reassigning…',true);
+  try{
+    const res=await fetch('/api/reassign',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:activeReassignRow,file_path:fp,tolerance:getTol(),use_microseconds:getMicro()})});
+    const data=await res.json();
+    if(data.error){setStatus('Reassign error: '+data.error);return}
+    renderResults(data);setStatus('File reassigned.');
+  }catch(e){setStatus('Reassign failed: '+e.message);}
+  finally{$('spinner').style.display='none'}
+}
+$('btn-close-rov').addEventListener('click',()=>$('rov').style.display='none');
+$('rov').addEventListener('click',e=>{if(e.target===$('rov'))$('rov').style.display='none'});
+
+/* ── Assign unmatched ───────────────────────────────────────────────── */
+function openAssign(path, fname){
+  pendingAssignFile=path;
+  $('assign-file-name').textContent='File: '+fname;
+  const sel=$('assign-row-select');sel.innerHTML='';
+  allResults.filter(r=>r.status==='UNMATCHED').forEach(r=>{
+    const o=document.createElement('option');
+    o.value=r.sheet_row;
+    o.textContent=`Row ${r.sheet_row}: ${r.track_title} — ${r.artist_name}`;
+    sel.appendChild(o);
+  });
+  if(!sel.options.length){
+    sel.innerHTML='<option disabled>No UNMATCHED rows available</option>';
+    $('btn-confirm-assign').disabled=true;
+  }else{
+    $('btn-confirm-assign').disabled=false;
+  }
+  $('assign-modal').style.display='flex';
+}
+
+$('btn-confirm-assign').addEventListener('click',async()=>{
+  const row=parseInt($('assign-row-select').value);
+  if(!row||!pendingAssignFile)return;
+  $('assign-modal').style.display='none';setStatus('Assigning…',true);
+  try{
+    const res=await fetch('/api/assign-unmatched',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:row,file_path:pendingAssignFile,tolerance:getTol(),use_microseconds:getMicro()})});
+    const data=await res.json();
+    if(data.error){setStatus('Assign error: '+data.error);return}
+    renderResults(data);setStatus('File assigned.');
+  }catch(e){setStatus('Assign failed: '+e.message);}
+  finally{$('spinner').style.display='none'}
+});
+$('btn-close-assign').addEventListener('click',()=>$('assign-modal').style.display='none');
+$('assign-modal').addEventListener('click',e=>{if(e.target===$('assign-modal'))$('assign-modal').style.display='none'});
+</script>
+</body>
+</html>

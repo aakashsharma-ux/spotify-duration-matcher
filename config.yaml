@@ -1,0 +1,25 @@
+# spotify-duration-matcher — default configuration
+# All values can be overridden by CLI flags.
+
+# Google Sheets settings
+sheet_id: ""                    # Paste the Sheet ID from its URL here
+credentials_file: "creds.json" # Path to GCP service-account JSON key
+
+# Audio library
+audio_dir: ""                   # Default folder to scan for audio files
+recursive: true                 # true = scan subdirectories
+
+# Matching
+match_threshold: 55             # 0–100; below this score → UNMATCHED
+duration_tolerance_sec: 1.0    # seconds; above this → col S = "YES"
+
+# Rename template (Python format string)
+# Available keys: idx (int), artist (str), title (str), ext (str with dot)
+rename_template: "{idx:03d} - {title} - {artist}{ext}"
+
+# Output
+output_dir: "./reports"         # Where CSV reports are saved
+cache_db: ".duration_cache.db" # SQLite cache inside audio_dir
+
+# Web UI
+web_port: 5050
