@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from flask import Flask, after_this_request, jsonify, render_template, request, send_file
 
-from .audio_scanner import scan_audio_files, extract_duration
+from .audio_scanner import AUDIO_EXTENSIONS, scan_audio_files, extract_duration
 from .matcher import match_tracks
 from .renamer import rename_matched_files
 from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS
@@ -31,7 +31,12 @@ from .sheet_loader import load_sheet
 
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_MB     = 512
+MAX_UPLOAD_MB     = 150        # per REQUEST ceiling — the browser splits large
+                                # audio selections into small chunked requests
+                                # (see templates/index.html), so this only needs
+                                # to comfortably cover one chunk, not everything
+                                # at once. Keeps a single bad request from ever
+                                # trying to buffer close to this box's 512MB RAM.
 SESSION_TTL_SEC   = 3600       # 1 hour idle timeout
 MAX_SESSIONS      = 300        # upper bound for memory safety
 API               = "/api"
@@ -139,6 +144,26 @@ def create_app(config: dict) -> Flask:
     )
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
+    # ── JSON error handlers ───────────────────────────────────────────────
+    # Flask/Werkzeug's default error pages are HTML. Every /api/* response
+    # is expected to be JSON by the frontend — without these handlers, an
+    # oversized or failed request returns an HTML page, the browser's
+    # JSON.parse throws inside an event-handler callback with nothing to
+    # catch it, and the upload promise never resolves *or* rejects. That's
+    # what "hangs forever" actually was: not merely slow, but stuck.
+    @app.errorhandler(413)
+    def _too_large(_exc):
+        return jsonify({
+            "error": f"That batch is too large for one request (over "
+                     f"{MAX_UPLOAD_MB} MB). Files upload in small chunks "
+                     f"automatically — please try again."
+        }), 413
+
+    @app.errorhandler(500)
+    def _server_error(exc):
+        logger.exception("Unhandled server error: %s", exc)
+        return jsonify({"error": "Server error — please try again."}), 500
+
     # ── Helpers ─────────────────────────────────────────────────────────────
 
     def _cfg(key: str, default: Any = None) -> Any:
@@ -190,20 +215,43 @@ def create_app(config: dict) -> Flask:
     @app.route(f"{API}/upload-audio", methods=["POST"])
     @_session
     def upload_audio(sess: dict) -> Any:
+        """Save one chunk of an audio selection.
+
+        The browser splits large selections into several small requests so
+        one slow or failed chunk never means re-uploading everything (see
+        the upload logic in templates/index.html). The FIRST chunk of a
+        new selection is sent with reset=true, which clears out any
+        previous upload owned by this session; every following chunk in
+        the same selection appends into that same directory. The response
+        always reports the running total on disk, so the client has an
+        authoritative count even across many chunked requests.
+        """
         files = request.files.getlist("audio_files")
         if not files or all(f.filename == "" for f in files):
             return jsonify({"error": "No audio files received."}), 400
-        tmp_dir = tempfile.mkdtemp(prefix="sdm_audio_")
-        saved   = 0
+
+        reset   = request.form.get("reset", "false").lower() == "true"
+        tmp_dir = sess.get("_owned_audio_dir")
+        if reset or not tmp_dir or not os.path.isdir(tmp_dir):
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)   # drop the old batch, don't leak it
+            tmp_dir = tempfile.mkdtemp(prefix="sdm_audio_")
+
+        saved = 0
         for f in files:
             safe_name = os.path.basename(f.filename.replace("\\", "/"))
             if safe_name:
                 f.save(os.path.join(tmp_dir, safe_name))
                 saved += 1
+
         sess["audio_dir"] = tmp_dir
         sess["_owned_audio_dir"] = tmp_dir   # safe to delete on eviction — we created it
-        logger.info("Uploaded %d audio files to %s", saved, tmp_dir)
-        return jsonify({"audio_dir": tmp_dir, "file_count": saved})
+        total = sum(
+            1 for entry in os.scandir(tmp_dir)
+            if entry.is_file() and os.path.splitext(entry.name)[1].lower() in AUDIO_EXTENSIONS
+        )
+        logger.info("Uploaded %d audio file(s) to %s (running total: %d)", saved, tmp_dir, total)
+        return jsonify({"audio_dir": tmp_dir, "file_count": total, "chunk_file_count": saved})
 
     # ── Analyse via CSV upload ─────────────────────────────────────────────────
 

@@ -75,6 +75,7 @@ input[type=text],input[type=number],select{
   padding:7px 10px;color:var(--text);font-family:var(--mono);font-size:12px;
   outline:none;transition:border-color .15s}
 input[type=text]:focus,input[type=number]:focus,select:focus{border-color:var(--green)}
+input[readonly]{background:var(--s2);color:var(--dim);cursor:default}
 select option{background:var(--s3)}
 
 .sr{display:flex;align-items:center;gap:9px}
@@ -282,7 +283,12 @@ tbody td{padding:8px 10px;vertical-align:middle}
       <div class="ch">🎵 Audio Source</div>
       <div class="cb">
         <div><label class="fl">Folder path</label>
-          <input type="text" id="audio-dir" placeholder="C:\Users\You\Music"></div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" id="audio-dir" placeholder="C:\Users\You\Music" style="flex:1">
+            <button type="button" class="btn btn-s btn-sm" id="btn-unlock-dir"
+                    style="display:none" title="Type a path manually instead">✎</button>
+          </div>
+        </div>
         <div class="br">
           <button class="btn btn-s" id="btn-bf">📁 Folder</button>
           <button class="btn btn-s" id="btn-fi">🎵 Files</button>
@@ -336,7 +342,7 @@ tbody td{padding:8px 10px;vertical-align:middle}
       </div>
     </div>
 
-    <button class="btn btn-p btn-full" id="btn-analyse">▶  Analyse</button>
+    <button class="btn btn-p btn-full" id="btn-analyse" disabled>▶  Analyse</button>
     <div class="ar">
       <button class="btn btn-s" id="btn-rename" disabled>✏ Rename</button>
       <button class="btn btn-s disabled" id="btn-report">⬇ Report</button>
@@ -664,7 +670,7 @@ function setCSV(f){
   csvFile=f;cz.classList.add('got');
   $('dz-i').style.display=$('dz-l').style.display=$('dz-h').style.display='none';
   const c=$('csv-chosen');c.style.display='block';c.textContent='✓  '+f.name;
-  setStatus('CSV loaded: '+f.name);
+  refreshAnalyseGate();
 }
 
 /* ── Threshold slider ───────────────────────────────────────────────── */
@@ -687,30 +693,166 @@ $('btn-fi').addEventListener('click',()=>fii.click());
 fif.addEventListener('change',()=>handleFiles(fif.files));
 fii.addEventListener('change',()=>handleFiles(fii.files));
 
+/* Large selections (80-90+ tracks) upload as several small requests instead
+   of one giant one. That keeps each request fast and reliable on free
+   hosting, gives an accurate progress bar, and means one failed/slow chunk
+   only needs a small retry instead of re-sending everything from scratch. */
+const CHUNK_MAX_FILES   = 5;
+const CHUNK_MAX_BYTES   = 15*1024*1024;
+const CHUNK_CONCURRENCY = 2;
+
+let uploadInProgress = false;   // true while any chunk is still in flight
+let uploadComplete   = false;   // true only once every chunk has succeeded
+
+function makeChunks(files){
+  const chunks=[];let cur=[],curBytes=0;
+  for(const f of files){
+    if(cur.length&&(cur.length>=CHUNK_MAX_FILES||curBytes+f.size>CHUNK_MAX_BYTES)){
+      chunks.push(cur);cur=[];curBytes=0;
+    }
+    cur.push(f);curBytes+=f.size;
+  }
+  if(cur.length)chunks.push(cur);
+  return chunks;
+}
+
+function uploadChunk(files,reset,onProgress){
+  return new Promise((ok,fail)=>{
+    const fd=new FormData();
+    files.forEach(f=>fd.append('audio_files',f,f.name));
+    if(reset)fd.append('reset','true');
+    const xhr=new XMLHttpRequest();
+    xhr.timeout=90000;   // generous: free-tier hosting can take ~30-60s to wake from idle
+    xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable&&onProgress)onProgress(e.loaded)});
+    xhr.onload=()=>{
+      let data;
+      try{data=JSON.parse(xhr.responseText)}
+      catch(_){fail(new Error(`Server returned an unexpected response (status ${xhr.status}).`));return}
+      if(xhr.status<200||xhr.status>=300||data.error){
+        fail(new Error(data.error||`Upload failed (status ${xhr.status}).`));return;
+      }
+      ok(data);
+    };
+    // A raw connection-level failure previously rejected with the bare
+    // Event object, so e.message was undefined — hence "Upload failed:
+    // undefined". Always reject with a real Error with a real message.
+    xhr.onerror=()=>fail(new Error('Network error during upload — check your connection and try again.'));
+    xhr.ontimeout=()=>fail(new Error('Upload timed out — free hosting can take up to a minute to wake up, please try again.'));
+    xhr.open('POST','/api/upload-audio');
+    Object.entries(H).forEach(([k,v])=>xhr.setRequestHeader(k,v));
+    xhr.send(fd);
+  });
+}
+
 async function handleFiles(list){
   if(!list||!list.length)return;
   const exts=new Set(['.mp3','.flac','.wav','.aac','.m4a','.ogg','.opus','.wma','.ape','.aiff','.alac']);
   const audio=Array.from(list).filter(f=>exts.has('.'+f.name.split('.').pop().toLowerCase()));
   if(!audio.length){setStatus('No audio files found in selection.');return}
-  $('us').style.display='block';$('um').textContent=`Uploading ${audio.length} files…`;
-  $('upb').style.width='0%';setStatus(`Uploading ${audio.length} files…`,true);
-  const fd=new FormData();audio.forEach(f=>fd.append('audio_files',f,f.name));
+
+  const chunks=makeChunks(audio);
+  const totalBytes=audio.reduce((s,f)=>s+f.size,0);
+  const chunkLoaded=new Array(chunks.length).fill(0);
+  let uploadedFiles=0;
+
+  uploadInProgress=true;uploadComplete=false;uploadedDir='';
+  $('audio-dir').value='';$('audio-dir').readOnly=false;
+  $('btn-unlock-dir').style.display='none';
+  $('us').style.display='block';$('upb').style.width='0%';$('um').style.color='';
+  $('um').textContent=`Uploading 0/${audio.length} files…`;
+  refreshAnalyseGate();
+  setStatus(`Uploading ${audio.length} audio files…`,true);
+
+  const updateProgress=()=>{
+    const sent=chunkLoaded.reduce((a,b)=>a+b,0);
+    const pct=totalBytes?Math.round(sent/totalBytes*100):0;
+    $('upb').style.width=pct+'%';
+    $('um').textContent=`Uploading ${uploadedFiles}/${audio.length} files (${pct}%)…`;
+  };
+
+  async function sendChunk(i){
+    const files=chunks[i];
+    const track=loaded=>{chunkLoaded[i]=loaded;updateProgress()};
+    let data;
+    try{
+      data=await uploadChunk(files,i===0,track);
+    }catch(firstErr){
+      await new Promise(r=>setTimeout(r,800));   // brief pause, then one retry
+      data=await uploadChunk(files,i===0,track);
+    }
+    chunkLoaded[i]=files.reduce((s,f)=>s+f.size,0);
+    uploadedFiles+=files.length;
+    uploadedDir=data.audio_dir;
+    updateProgress();
+  }
+
   try{
-    const res=await new Promise((ok,fail)=>{
-      const xhr=new XMLHttpRequest();
-      xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable)$('upb').style.width=Math.round(e.loaded/e.total*100)+'%'});
-      xhr.onload=()=>ok(JSON.parse(xhr.responseText));xhr.onerror=fail;
-      xhr.open('POST','/api/upload-audio');
-      Object.entries(H).forEach(([k,v])=>xhr.setRequestHeader(k,v));
-      xhr.send(fd);
-    });
-    if(res.error)throw new Error(res.error);
-    uploadedDir=res.audio_dir;$('audio-dir').value=res.audio_dir;
-    $('upb').style.width='100%';$('um').textContent=`✓ ${res.file_count} files ready`;
-    setStatus(`${res.file_count} audio files ready.`);
-  }catch(e){setStatus('Upload failed: '+e.message);$('um').textContent='✗ '+e.message;}
-  finally{$('spinner').style.display='none'}
+    await sendChunk(0);   // sent alone: carries reset=true, must land before the rest
+    let next=1;
+    const worker=async()=>{while(next<chunks.length){const i=next++;await sendChunk(i)}};
+    await Promise.all(Array.from({length:Math.min(CHUNK_CONCURRENCY,Math.max(0,chunks.length-1))},worker));
+
+    uploadComplete=true;
+    $('audio-dir').value=uploadedDir;$('audio-dir').readOnly=true;
+    $('btn-unlock-dir').style.display='inline-flex';
+    $('upb').style.width='100%';$('um').style.color='var(--green)';
+    $('um').textContent=`✓ ${uploadedFiles} files ready`;
+    setStatus(`${uploadedFiles} audio files ready.`);
+  }catch(e){
+    $('um').style.color='var(--red)';$('um').textContent='✗ '+e.message;
+    setStatus('Upload failed: '+e.message);
+  }finally{
+    uploadInProgress=false;
+    $('spinner').style.display='none';
+    refreshAnalyseGate();
+  }
 }
+
+/* Lets someone fall back to typing a path by hand (e.g. running the tool
+   locally) instead of uploading through the browser. */
+$('btn-unlock-dir').addEventListener('click',()=>{
+  uploadedDir='';uploadComplete=false;
+  $('audio-dir').value='';$('audio-dir').readOnly=false;$('audio-dir').focus();
+  $('btn-unlock-dir').style.display='none';
+  $('us').style.display='none';
+  refreshAnalyseGate();
+});
+$('audio-dir').addEventListener('input',refreshAnalyseGate);
+$('sheet-id').addEventListener('input',refreshAnalyseGate);
+
+/* ── Analyse readiness gate ────────────────────────────────────────────
+   Keeps btn-analyse disabled until a sheet source AND a complete audio
+   source are both present, and reflects what's still missing in the
+   header status line. */
+function refreshAnalyseGate(){
+  const haveSheet=!!csvFile||!!$('sheet-id').value.trim();
+  const typedPath=!uploadedDir&&!!$('audio-dir').value.trim();
+  const haveAudio=(uploadComplete&&!!uploadedDir)||typedPath;
+  $('btn-analyse').disabled=!(haveSheet&&haveAudio&&!uploadInProgress);
+  if(uploadInProgress)return;   // the upload flow owns the status line while active
+  if(!haveSheet&&!haveAudio)setStatus('Load a CSV and choose an audio source, then click Analyse.');
+  else if(!haveSheet)setStatus('⚠ Load a CSV or enter a Sheet ID to continue.');
+  else if(!haveAudio)setStatus('⚠ Select or upload audio files to continue.');
+  else setStatus('✓ Ready — click Analyse to begin.');
+}
+
+/* ── Wake the free-tier server on load ─────────────────────────────────
+   Render's free tier sleeps after 15 min idle and can take up to a minute
+   to respond to the first request. Ping proactively so that "slow" reads
+   as "waking up" instead of "broken", and so real uploads land on an
+   already-warm server. */
+(async function pingServer(){
+  const slow=setTimeout(()=>{
+    if(!uploadInProgress)setStatus('Waking up the server — free hosting can take up to a minute after being idle…',true);
+  },2500);
+  try{ await fetch('/api/health',{headers:H}); }
+  catch(_){ /* surfaces naturally once the user takes an action */ }
+  finally{
+    clearTimeout(slow);
+    $('spinner').style.display='none';
+    refreshAnalyseGate();
+  }
+})();
 
 /* ── File download via fetch+blob ──────────────────────────────────────
    Plain <a href> navigation cannot send the X-Session-Id header, so any

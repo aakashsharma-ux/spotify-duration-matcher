@@ -159,6 +159,35 @@ class TestUploadAudio:
                         content_type="multipart/form-data")
         assert r.status_code == 400
 
+    def test_upload_appends_across_chunks(self, client, auth_headers):
+        """Two chunks of the same selection must land in the same folder."""
+        d1 = {"audio_files": (io.BytesIO(b"\xff\xfb" * 100), "a.mp3"), "reset": "true"}
+        r1 = client.post("/api/upload-audio", headers=auth_headers,
+                         data=d1, content_type="multipart/form-data")
+        assert r1.get_json()["file_count"] == 1
+
+        d2 = {"audio_files": (io.BytesIO(b"\xff\xfb" * 100), "b.mp3")}
+        r2 = client.post("/api/upload-audio", headers=auth_headers,
+                         data=d2, content_type="multipart/form-data")
+        body2 = r2.get_json()
+        assert body2["file_count"] == 2, "second chunk must add to, not replace, the first"
+        assert body2["chunk_file_count"] == 1
+        assert body2["audio_dir"] == r1.get_json()["audio_dir"]
+
+    def test_upload_reset_clears_previous_batch(self, client, auth_headers):
+        """reset=true must start a fresh folder and clean up the old one."""
+        d1 = {"audio_files": (io.BytesIO(b"\xff\xfb" * 100), "a.mp3"), "reset": "true"}
+        r1 = client.post("/api/upload-audio", headers=auth_headers,
+                         data=d1, content_type="multipart/form-data")
+        old_dir = r1.get_json()["audio_dir"]
+
+        d2 = {"audio_files": (io.BytesIO(b"\xff\xfb" * 100), "b.mp3"), "reset": "true"}
+        r2 = client.post("/api/upload-audio", headers=auth_headers,
+                         data=d2, content_type="multipart/form-data")
+        body2 = r2.get_json()
+        assert body2["file_count"] == 1
+        assert not os.path.exists(old_dir), "reset must clean up the previous owned dir, not leak it"
+
 
 # ── Analyse CSV ──────────────────────────────────────────────────────────────
 
