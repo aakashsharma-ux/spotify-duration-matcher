@@ -141,3 +141,27 @@ class TestMatchTracks:
         with patch("src.matcher._combined_score", return_value=54.9):
             table, _ = match_tracks(tracks, audio, threshold=55)
         assert table[0]["status"] == UNMATCHED_LABEL
+
+    def test_track_number_boost(self):
+        # Even with low direct combined score, if it matches the track number, it gets boosted and matched.
+        tracks = [make_track(row=3, title="Stone Shoe", artist="Animal Logic")]
+        # Title/artist have some basic similarity but not enough on their own
+        audio = [make_audio(path="/music/003 - Animal - Stone.mp3")]
+        table, unmatched = match_tracks(tracks, audio, threshold=55)
+        assert table[0]["status"] != UNMATCHED_LABEL
+        assert table[0]["matched_file"] == "/music/003 - Animal - Stone.mp3"
+        assert table[0]["match_score"] == 100.0
+
+    def test_compute_unmatched_status_categorization(self):
+        tracks = [make_track(row=3, title="Stone Shoe", artist="Animal Logic")]
+        audio = [
+            make_audio(path="/music/Some completely different song.mp3"),  # NOT_IN_CSV
+            make_audio(path="/music/Stone - Animal.mp3")  # NO_MATCH (similarity but score < 55)
+        ]
+        # Set a high threshold so they both remain unmatched
+        table, unmatched = match_tracks(tracks, audio, threshold=95)
+        assert len(unmatched) == 2
+        # Verify status categorization
+        unmatched_by_path = {f["path"]: f for f in unmatched}
+        assert unmatched_by_path["/music/Some completely different song.mp3"]["match_status"] == "NOT_IN_CSV"
+        assert unmatched_by_path["/music/Stone - Animal.mp3"]["match_status"] == "NO_MATCH"

@@ -46,13 +46,24 @@ def _best_score_for_file(
     audio_file: dict,
     sheet_title: str,
     sheet_artist: str,
+    sheet_row: Optional[int] = None,
 ) -> tuple[float, str]:
     """Return (best_combined_score, pattern_name) for one audio file."""
     candidates = parse_filename(audio_file["path"])
     best: float = 0.0
     best_pattern = ""
+
+    # Try to extract leading track number
+    from pathlib import Path as _Path
+    import re as _re
+    filename = _Path(audio_file["path"]).name
+    m = _re.match(r"^(\d{1,3})[\.\s\-]+", filename)
+    file_track_num = int(m.group(1)) if m else None
+
     for pattern_name, artist_cand, title_cand in candidates:
         score = _combined_score(title_cand, artist_cand, sheet_title, sheet_artist)
+        if sheet_row is not None and file_track_num == sheet_row and score >= 30.0:
+            score = 100.0
         if score > best:
             best = score
             best_pattern = pattern_name
@@ -112,7 +123,7 @@ def match_tracks(
         for idx, af in enumerate(available):
             if af["used"]:
                 continue
-            score, pattern = _best_score_for_file(af, sheet_title, sheet_artist)
+            score, pattern = _best_score_for_file(af, sheet_title, sheet_artist, track["sheet_row"])
             scored.append((score, idx, pattern))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -180,6 +191,8 @@ def match_tracks(
             })
 
     unmatched_audio = [f for f in available if not f["used"]]
+    compute_unmatched_status(unmatched_audio, sheet_rows)
+
     matched    = sum(1 for r in results if r["status"] != UNMATCHED_LABEL)
     mismatched = sum(1 for r in results if r["flag_gt1s"])
     logger.info(
@@ -188,3 +201,22 @@ def match_tracks(
         len(results) - matched, len(unmatched_audio),
     )
     return results, unmatched_audio
+
+
+def compute_unmatched_status(
+    unmatched_audio: list[dict],
+    sheet_rows: list[dict],
+) -> list[dict]:
+    """Calculate best match score and match status for unmatched audio files."""
+    for af in unmatched_audio:
+        max_score = 0.0
+        for track in sheet_rows:
+            sheet_title  = track.get("track_title", "")
+            sheet_artist = track.get("artist_name", "")
+            score, _ = _best_score_for_file(af, sheet_title, sheet_artist, track.get("sheet_row", 0))
+            if score > max_score:
+                max_score = score
+        af["best_match_score"] = round(max_score, 1)
+        # Classify as NOT_IN_CSV if score is extremely low (e.g. < 30)
+        af["match_status"] = "NOT_IN_CSV" if max_score < 30.0 else "NO_MATCH"
+    return unmatched_audio

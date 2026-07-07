@@ -24,7 +24,7 @@ from typing import Any, Optional
 from flask import Flask, after_this_request, jsonify, render_template, request, send_file
 
 from .audio_scanner import AUDIO_EXTENSIONS, scan_audio_files, extract_duration
-from .matcher import match_tracks
+from .matcher import match_tracks, compute_unmatched_status
 from .renamer import rename_matched_files
 from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS
 from .sheet_loader import load_sheet
@@ -206,6 +206,17 @@ def create_app(config: dict) -> Flask:
     def index() -> Any:
         return render_template("index.html")
 
+    @app.route("/static/sunset.jpg")
+    def sunset_img() -> Any:
+        return send_file(str(Path(__file__).parent.parent / "static" / "sunset.jpg"))
+
+    @app.after_request
+    def add_header(response: Any) -> Any:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
     @app.route(f"{API}/health")
     def health() -> Any:
         return jsonify({"status": "ok", "active_sessions": _store.active_count})
@@ -354,7 +365,16 @@ def create_app(config: dict) -> Flask:
                 })
                 break
         sess["match_table"] = match_table
-        unmatched_audio = [f for f in sess.get("audio_files", []) if not f.get("used")]
+
+        audio_files = sess.get("audio_files", [])
+        matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
+        for af in audio_files:
+            af["used"] = af["path"] in matched_paths
+        sess["audio_files"] = audio_files
+
+        unmatched_audio = [f for f in audio_files if not f.get("used")]
+        unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
+
         return jsonify({
             "results":         _serialise(match_table),
             "unmatched_files": _serialise_audio(unmatched_audio),
@@ -399,15 +419,16 @@ def create_app(config: dict) -> Flask:
                 })
                 break
 
-        # Mark the audio file as used so it leaves the unmatched list
-        for af in audio_files:
-            if af["path"] == str(new_path):
-                af["used"] = True
-                break
-
         sess["match_table"] = match_table
+
+        matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
+        for af in audio_files:
+            af["used"] = af["path"] in matched_paths
         sess["audio_files"] = audio_files
+
         unmatched_audio = [f for f in audio_files if not f.get("used")]
+        unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
+
         return jsonify({
             "results":         _serialise(match_table),
             "unmatched_files": _serialise_audio(unmatched_audio),
@@ -434,9 +455,33 @@ def create_app(config: dict) -> Flask:
                                   "skipped_not_found": 0, "skipped_dest_exists": 0,
                                   "errors": []},
             })
+
+        # Save mapping of old file paths by sheet_row to update audio_files after renaming
+        old_matched_files = {r["sheet_row"]: r.get("matched_file") for r in match_table if r.get("matched_file")}
+
         match_table, stats = rename_matched_files(match_table, template=template)
         sess["match_table"] = match_table
-        unmatched_audio = [f for f in sess.get("audio_files", []) if not f.get("used")]
+
+        audio_files = sess.get("audio_files", [])
+        for row in match_table:
+            sheet_row = row.get("sheet_row")
+            old_path = old_matched_files.get(sheet_row)
+            new_path = row.get("matched_file")
+            if old_path and new_path and old_path != new_path:
+                for af in audio_files:
+                    if af["path"] == old_path:
+                        af["path"] = new_path
+                        af["filename"] = os.path.basename(new_path)
+                        break
+
+        matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
+        for af in audio_files:
+            af["used"] = af["path"] in matched_paths
+        sess["audio_files"] = audio_files
+
+        unmatched_audio = [f for f in audio_files if not f.get("used")]
+        unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
+
         return jsonify({
             "results":         _serialise(match_table),
             "unmatched_files": _serialise_audio(unmatched_audio),
@@ -493,15 +538,22 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": "Row not found."}), 404
         from rapidfuzz import fuzz
         from .filename_parser import normalise, parse_filename
+        import re as _re
         title  = normalise(target.get("track_title", ""))
         artist = normalise(target.get("artist_name", ""))
         scored = []
         for af in scan_audio_files(audio_dir=audio_dir, recursive=True):
             best = 0.0
+            filename = Path(af["path"]).name
+            m = _re.match(r"^(\d{1,3})[\.\s\-]+", filename)
+            file_track_num = int(m.group(1)) if m else None
             for _, art_c, tit_c in parse_filename(af["path"]):
                 t = fuzz.token_sort_ratio(normalise(tit_c), title)
                 a = fuzz.token_sort_ratio(normalise(art_c), artist)
-                best = max(best, 0.6 * t + 0.4 * a)
+                score = 0.6 * t + 0.4 * a
+                if file_track_num == sheet_row and score >= 30.0:
+                    score = 100.0
+                best = max(best, score)
             scored.append({"path": af["path"], "score": round(best, 1), "duration": af["duration"]})
         scored.sort(key=lambda x: x["score"], reverse=True)
         return jsonify({"candidates": scored[:top_n]})
@@ -613,6 +665,8 @@ def _serialise_audio(audio_files: list[dict]) -> list[dict]:
             "filename": os.path.basename(f["path"]),
             "duration": f.get("duration"),
             "status":   f.get("status", "OK"),
+            "best_match_score": f.get("best_match_score", 0.0),
+            "match_status": f.get("match_status", "NOT_IN_CSV"),
         }
         for f in audio_files
     ]

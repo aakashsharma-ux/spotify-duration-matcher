@@ -650,3 +650,57 @@ class TestSessionResourceCleanup:
         sess = store.get_or_create("new-session")
         assert "_owned_audio_dir" in sess
         assert sess["_owned_audio_dir"] is None
+
+
+class TestFilterAndReSync:
+    def test_reassign_updates_used_status_correctly(self, client, auth_headers):
+        from src.web_server import _store
+        from unittest.mock import patch
+        
+        sess = _store.get_or_create("reassign-session-test")
+        sess["audio_files"] = [
+            {"path": str(Path("/music/a.mp3")), "filename": "a.mp3", "duration": 100.0, "used": False},
+            {"path": str(Path("/music/b.mp3")), "filename": "b.mp3", "duration": 120.0, "used": False},
+        ]
+        sess["match_table"] = [
+            {"sheet_row": 3, "track_title": "Track 1", "artist_name": "Artist 1", "spotify_dur": 100.0, "matched_file": None, "status": "UNMATCHED"},
+        ]
+        sess["audio_dir"] = "/music"
+
+        with patch("src.web_server.Path.exists", return_value=True), \
+             patch("src.web_server.extract_duration", return_value=100.0):
+            r = client.post("/api/reassign", headers={"X-Session-Id": "reassign-session-test"},
+                            json={"sheet_row": 3, "file_path": str(Path("/music/a.mp3")), "tolerance": 1.0, "use_microseconds": True})
+
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["results"][0]["matched_file"] == str(Path("/music/a.mp3"))
+        unmatched_paths = [f["path"] for f in body["unmatched_files"]]
+        assert str(Path("/music/a.mp3")) not in unmatched_paths
+        assert str(Path("/music/b.mp3")) in unmatched_paths
+
+    def test_assign_unmatched_updates_used_status_correctly(self, client, auth_headers):
+        from src.web_server import _store
+        from unittest.mock import patch
+        
+        sess = _store.get_or_create("assign-unmatched-session-test")
+        sess["audio_files"] = [
+            {"path": str(Path("/music/a.mp3")), "filename": "a.mp3", "duration": 100.0, "used": False},
+            {"path": str(Path("/music/b.mp3")), "filename": "b.mp3", "duration": 120.0, "used": False},
+        ]
+        sess["match_table"] = [
+            {"sheet_row": 3, "track_title": "Track 1", "artist_name": "Artist 1", "spotify_dur": 100.0, "matched_file": None, "status": "UNMATCHED"},
+        ]
+        sess["audio_dir"] = "/music"
+
+        with patch("src.web_server.Path.exists", return_value=True), \
+             patch("src.web_server.extract_duration", return_value=100.0):
+            r = client.post("/api/assign-unmatched", headers={"X-Session-Id": "assign-unmatched-session-test"},
+                            json={"sheet_row": 3, "file_path": str(Path("/music/a.mp3")), "tolerance": 1.0, "use_microseconds": True})
+
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["results"][0]["matched_file"] == str(Path("/music/a.mp3"))
+        unmatched_paths = [f["path"] for f in body["unmatched_files"]]
+        assert str(Path("/music/a.mp3")) not in unmatched_paths
+        assert str(Path("/music/b.mp3")) in unmatched_paths

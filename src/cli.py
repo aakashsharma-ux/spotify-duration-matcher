@@ -11,7 +11,7 @@ import yaml
 from rich.console import Console
 
 from .audio_scanner import scan_audio_files
-from .matcher import match_tracks
+from .matcher import match_tracks, compute_unmatched_status
 from .reporter import print_rich_table, export_csv_report
 from .renamer import rename_matched_files
 from .sheet_loader import load_sheet, write_back_to_sheet
@@ -143,12 +143,23 @@ def main(
     if interactive:
         match_table = _interactive_reassign(match_table, audio_files)
 
+    # Re-sync used status and compute unmatched status categorization
+    matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
+    for af in audio_files:
+        af["used"] = af["path"] in matched_paths
+    unmatched_audio = [f for f in audio_files if not f.get("used")]
+    compute_unmatched_status(unmatched_audio, sheet_rows)
+
     print_rich_table(match_table, console)
 
     if unmatched_audio:
         console.print(f"\n[yellow]{len(unmatched_audio)} audio file(s) not matched to any sheet row.[/yellow]")
         for af in unmatched_audio:
-            console.print(f"  • {Path(af['path']).name}")
+            if af.get("match_status") == "NOT_IN_CSV":
+                status_str = "[red]Not in CSV[/red]"
+            else:
+                status_str = f"[orange3]No Match Found ({af.get('best_match_score', 0)}%)[/orange3]"
+            console.print(f"  • {Path(af['path']).name} — {status_str}")
 
     if sort_rename:
         console.print("[cyan]Renaming files…[/cyan]")
