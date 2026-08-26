@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spotify Duration Matcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#121212;--surface:#181818;--s2:#242424;--s3:#2e2e2e;
+  --border:#282828;--border2:#3e3e3e;
+  --green:#1db954;--green-g:rgba(29,185,84,.1);
+  --red:#f25c54;--red-g:rgba(242,92,84,.1);
+  --amber:#f4a261;--amber-g:rgba(244,162,97,.1);
+  --blue:#3a86c8;--blue-g:rgba(58,134,200,.1);
+  --text:#ffffff;--dim:#b3b3b3;--faint:#727272;
+  --mono:'JetBrains Mono','Fira Code',monospace;
+  --sans:'Outfit','Montserrat','Inter','Segoe UI',system-ui,sans-serif;
+  --r:6px;--rl:8px;--hh:60px;--sw:320px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.55;position:relative}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:url('/static/sunset.jpg') no-repeat center center;background-size:cover;opacity:0.35}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* Header */
+header{position:fixed;top:0;left:0;right:0;z-index:200;height:var(--hh);
+  background:rgba(0,0,0,0.75);border-bottom:1px solid rgba(255,255,255,0.08);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  display:flex;align-items:center;gap:12px;padding:0 24px;overflow:hidden}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px;
+  color:#ffffff;text-decoration:none;flex-shrink:0;white-space:nowrap;letter-spacing:-0.4px}
+.logo-dot{width:28px;height:28px;border-radius:50%;background:var(--green);
+  display:flex;align-items:center;justify-content:center;font-size:15px;color:#000;font-weight:800}
+#sb{flex:1;display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:11.5px;color:var(--dim);min-width:0}
+#st{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp{width:13px;height:13px;flex-shrink:0;border:2px solid var(--border2);
+  border-top-color:var(--green);border-radius:50%;
+  animation:spin .7s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Layout */
+.layout{display:flex;margin-top:var(--hh);height:calc(100vh - var(--hh))}
+.sidebar{width:var(--sw);flex-shrink:0;height:100%;overflow-y:auto;
+  background:rgba(24,24,24,0.65);border-right:1px solid rgba(255,255,255,0.08);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  padding:12px 10px 18px;display:flex;flex-direction:column;gap:8px;
+  -ms-overflow-style:none;scrollbar-width:none}
+.sidebar::-webkit-scrollbar{display:none}
+.main{flex:1;min-width:0;height:100%;overflow-y:auto;padding:20px 24px 32px;
+  display:flex;flex-direction:column;gap:16px}
+
+/* Cards */
+.card{background:rgba(36,36,36,0.55);border:1px solid rgba(255,255,255,0.08);border-radius:var(--rl);flex-shrink:0;box-shadow:0 8px 32px rgba(0,0,0,0.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:2px}
+.ch{padding:6px 10px 2px;font-size:10px;font-weight:700;letter-spacing:1.2px;
+  text-transform:uppercase;color:var(--dim);border-bottom:none;
+  border-radius:var(--rl) var(--rl) 0 0}
+.cb{padding:8px 10px;display:flex;flex-direction:column;gap:8px}
+
+/* Drop zone */
+.dz{border:2px dashed rgba(255,255,255,0.15);border-radius:var(--rl);padding:10px 8px;
+  text-align:center;cursor:pointer;position:relative;background:rgba(0,0,0,0.2);
+  transition:border-color .2s,background .2s;color:var(--dim)}
+.dz:hover,.dz.over{border-color:var(--green);background:rgba(29,185,84,0.06)}
+.dz.got{border-color:var(--green);border-style:solid;background:rgba(29,185,84,0.1)}
+.dz input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.dz-icon{font-size:16px;margin-bottom:2px;color:var(--green)}
+.dz-lbl{font-size:11px;font-weight:600}
+.dz-hint{display:none}
+.dz-chosen{font-family:var(--mono);font-size:10px;color:var(--green);
+  margin-top:3px;font-weight:600;word-break:break-all}
+
+/* Form */
+.fl{display:block;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.6px;color:var(--dim);margin-bottom:2px}
+input[type=text],input[type=number],select{
+  width:100%;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:20px;
+  padding:5px 10px;color:var(--text);font-family:var(--sans);font-size:11.5px;
+  outline:none;transition:border-color .2s,background .2s}
+input[type=text]:focus,input[type=number]:focus,select:focus{border-color:var(--green);background:rgba(0,0,0,0.55)}
+input[readonly]{background:rgba(0,0,0,0.2);color:var(--dim);cursor:default}
+select option{background:#2a2a2a}
+
+.sr{display:flex;align-items:center;gap:9px}
+input[type=range]{flex:1;accent-color:var(--green);cursor:pointer}
+.sv{display:inline-block;font-family:var(--mono);font-size:13px;font-weight:700;color:var(--green);min-width:28px;text-align:right}
+
+/* Toggle */
+.tr{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;
+    font-size:11.5px;flex-wrap:nowrap;min-height:20px}
+.tog{display:inline-block;position:relative;width:30px;height:16px;flex-shrink:0;vertical-align:middle}
+.tog input{opacity:0;width:0;height:0}
+.tt{position:absolute;inset:0;background:var(--border2);border-radius:8px;transition:background .2s;cursor:pointer}
+.tb{position:absolute;width:10px;height:10px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .2s;pointer-events:none}
+.tog input:checked~.tt{background:var(--green)}
+.tog input:checked~.tt .tb{transform:translateX(14px)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:6px 12px;
+  border-radius:500px;border:none;font-size:11.5px;font-weight:700;cursor:pointer;
+  transition:opacity .15s,transform .1s,background .15s;text-decoration:none;
+  text-align:center;line-height:1.3;letter-spacing:0.2px;text-transform:uppercase}
+.btn:active{transform:scale(.96)}
+.btn:disabled,.btn.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+.btn-p{background:var(--green);color:#000000;font-size:12.5px;padding:9px 18px}
+.btn-p:hover:not(:disabled){background:#22d560;transform:scale(1.03)}
+.btn-p:active{transform:scale(.97)}
+.btn-s{background:rgba(0,0,0,0.4);color:var(--text);border:1px solid rgba(255,255,255,0.15)}
+.btn-s:hover:not(:disabled){border-color:#ffffff;background:rgba(255,255,255,0.1)}
+.btn-d{background:var(--red);color:#fff}
+.btn-full{width:100%}
+.btn-sm{padding:4px 8px;font-size:10px}
+.br{display:flex;gap:7px}
+.br .btn{flex:1;min-width:0;font-size:11px;padding:5px 6px}
+.ar{display:flex;gap:7px}
+.ar .btn{flex:1;min-width:0;padding:5px 6px}
+
+/* Upload status */
+#us{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:6px;
+  padding:6px 10px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.ubw{height:3px;background:var(--border);border-radius:2px;margin-top:4px}
+.ub{height:3px;background:var(--green);border-radius:2px;width:0;transition:width .3s}
+.ord{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--faint)}
+.ord::before,.ord::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* Summary pills */
+.summary{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.pill{display:flex;align-items:center;gap:16px;
+  background:rgba(24,24,24,0.5);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:14px 20px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  cursor:pointer;transition:border-color .15s,background .15s,transform .1s;user-select:none;
+  box-shadow:0 4px 16px rgba(0,0,0,0.35);flex:1;min-width:140px}
+.pill:hover{background:rgba(40,40,40,0.6);border-color:rgba(255,255,255,0.12)}
+.pill:active{transform:scale(.97)}
+.pill.active{border-color:var(--green)!important;background:rgba(40,40,40,0.65)!important}
+.pn{font-family:var(--sans);font-size:28px;font-weight:800;line-height:1;letter-spacing:-0.8px}
+.pl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
+.p-ok .pn{color:var(--green)}.p-bad .pn{color:var(--red)}.p-warn .pn{color:var(--amber)}.p-dim .pn{color:var(--dim)}
+
+/* Table */
+.tw{overflow-x:auto;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(24,24,24,0.6);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:860px}
+thead th{position:sticky;top:0;z-index:10;background:rgba(24,24,24,0.8);padding:12px 14px;
+  text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.8px;color:var(--dim);border-bottom:1px solid rgba(255,255,255,0.08);white-space:nowrap}
+tbody tr{border-bottom:1px solid rgba(255,255,255,0.04);transition:background .2s}
+tbody tr:hover{background:rgba(255,255,255,0.08)}
+tbody td{padding:10px 14px;vertical-align:middle}
+.row-ok td:first-child{border-left:4px solid var(--green)}
+.row-bad td:first-child{border-left:4px solid var(--red)}
+.row-warn td:first-child{border-left:4px solid var(--amber)}
+.mono{font-family:var(--mono)}.dim{color:var(--dim)}
+
+.flag-badge{background:var(--red-g);color:var(--red);border:1px solid rgba(242,92,84,.4);
+  border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700}
+
+/* Score / accuracy */
+.acc{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px}
+.acc-hi{background:var(--green-g);color:var(--green)}
+.acc-mid{background:var(--amber-g);color:var(--amber)}
+.acc-lo{background:var(--red-g);color:var(--red)}
+
+.sbadge{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.s-ok{background:var(--green-g);color:var(--green)}
+.s-mis{background:var(--red-g);color:var(--red)}
+.s-unm{background:var(--amber-g);color:var(--amber)}
+.s-man{background:var(--blue-g);color:var(--blue)}
+.s-err{background:var(--red-g);color:var(--red)}
+.s-inf{background:var(--s3);color:var(--dim)}
+
+.fn{max-width:190px;font-family:var(--mono);font-size:11px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:block;cursor:pointer;transition:color .15s}
+.fn:hover{color:var(--green);text-decoration:underline}
+
+/* Unmatched files section */
+.unm-section{margin-top:4px}
+.unm-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
+  background:rgba(24,24,24,0.5);border:1px solid rgba(255,255,255,0.06);border-radius:8px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  box-shadow:0 4px 16px rgba(0,0,0,0.35);
+  cursor:pointer;user-select:none;transition:background .15s}
+.unm-head:hover{background:rgba(40,40,40,0.6)}
+.unm-title{font-size:12.5px;font-weight:700;flex:1;letter-spacing:-0.2px}
+.unm-count{font-family:var(--mono);font-size:11px;font-weight:700;color:#000;
+  background:var(--green);padding:2px 8px;border-radius:10px}
+.unm-body{border:1px solid rgba(255,255,255,0.06);border-top:none;
+  background:rgba(24,24,24,0.5);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-radius:0 0 8px 8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.unm-row{display:flex;align-items:center;gap:12px;padding:10px 18px;
+  border-bottom:1px solid rgba(255,255,255,0.05);background:transparent}
+.unm-row:last-child{border-bottom:none}
+.unm-row:hover{background:rgba(255,255,255,0.06)}
+.unm-fn{flex:1;font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.unm-dur{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0;min-width:50px;text-align:right}
+.unm-empty{padding:20px;text-align:center;color:var(--faint);font-size:12px}
+
+/* Empty state */
+.empty{text-align:center;padding:70px 20px;color:var(--faint)}
+.empty .ei{font-size:44px;margin-bottom:12px;color:var(--green)}
+
+/* Modals */
+.ov{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.75);
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.panel{background:#282828;border:none;border-radius:12px;
+  width:min(520px,93vw);max-height:82vh;overflow-y:auto;
+  box-shadow:0 24px 72px rgba(0,0,0,0.8)}
+.ph{padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+  position:sticky;top:0;background:#282828;z-index:1}
+.ph h3{font-size:13.5px;font-weight:700}
+.pb{padding:16px 20px}
+.pt{font-size:12px;color:var(--dim);margin-bottom:14px}
+
+.modal-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-box{background:#282828;border:none;border-radius:12px;
+  width:min(500px,92vw);box-shadow:0 24px 72px rgba(0,0,0,0.8)}
+.mh{padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center}
+.mh h3{font-size:13px;font-weight:700}
+.mb{padding:18px}
+.mp{background:var(--s3);border:1px solid var(--border);border-radius:6px;
+  padding:11px 13px;font-family:var(--mono);font-size:11.5px;
+  word-break:break-all;color:var(--text);line-height:1.65;margin-bottom:12px;user-select:all}
+.cc{font-size:11px;color:var(--green);margin-left:8px;display:none}
+
+.cl{list-style:none;display:flex;flex-direction:column;gap:6px}
+.ci{display:flex;align-items:center;gap:10px;border:1px solid var(--border);
+  border-radius:7px;padding:9px 12px;cursor:pointer;transition:border-color .15s,background .15s}
+.ci:hover{border-color:var(--green);background:var(--green-g)}
+.cs{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--green);min-width:32px;font-weight:700}
+.cn{flex:1;font-size:11.5px;word-break:break-all}
+.cd{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
+
+/* Assign modal */
+#assign-modal .arow{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+#assign-modal select{flex:1}
+
+.th-content {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 0;
+}
+.th-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  gap: 6px;
+}
+.th-label-row:hover {
+  color: var(--text);
+}
+.sort-icon {
+  font-size: 10px;
+  color: var(--dim);
+}
+.col-filter {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 4px 8px;
+  color: var(--text);
+  font-size: 10px;
+  font-family: var(--sans);
+  width: 100%;
+  font-weight: 500;
+  transition: background 0.2s, border-color 0.2s;
+}
+.col-filter:focus {
+  border-color: var(--green);
+  background: rgba(0,0,0,0.5);
+  outline: none;
+}
+
+@media(max-width:760px){
+  .layout{flex-direction:column;height:auto}
+  .sidebar{width:100%;height:auto;border-right:none;border-bottom:1px solid var(--border)}
+  .main{height:auto}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="/"><div class="logo-dot">♬</div>Duration Matcher</a>
+  <div id="sb"><div class="sp" id="spinner"></div><span id="st">Load a CSV and choose an audio source, then click Analyse.</span></div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+
+    <!-- Sheet source -->
+    <div class="card">
+      <div class="ch">📋 Sheet Source</div>
+      <div class="cb">
+        <div>
+          <label class="fl">CSV Export — primary (drag &amp; drop)</label>
+          <div class="dz" id="csv-zone">
+            <input type="file" id="csv-input" accept=".csv">
+            <div class="dz-icon" id="dz-i">📄</div>
+            <div class="dz-lbl" id="dz-l">Drop your Google Sheet CSV here</div>
+            <div class="dz-hint" id="dz-h">File → Download → Comma Separated Values</div>
+            <div class="dz-chosen" id="csv-chosen" style="display:none"></div>
+          </div>
+        </div>
+        <div class="ord">or use live sheet</div>
+        <div>
+          <label class="fl">Google Sheet ID</label>
+          <input type="text" id="sheet-id" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74…">
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio source -->
+    <div class="card">
+      <div class="ch">🎵 Audio Source</div>
+      <div class="cb">
+        <div><label class="fl">Folder path</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" id="audio-dir" placeholder="C:\Users\You\Music" style="flex:1">
+            <button type="button" class="btn btn-s btn-sm" id="btn-unlock-dir"
+                    style="display:none" title="Type a path manually instead">✎</button>
+          </div>
+        </div>
+        <div class="br">
+          <button class="btn btn-s" id="btn-bf">📁 Folder</button>
+          <button class="btn btn-s" id="btn-fi">🎵 Files</button>
+        </div>
+        <input type="file" id="fi-folder" style="display:none" multiple>
+        <input type="file" id="fi-files"  style="display:none" multiple
+               accept="audio/*,.mp3,.flac,.wav,.aac,.m4a,.ogg,.opus,.wma,.ape,.aiff">
+        <div id="us" style="display:none">
+          <span id="um">Uploading…</span>
+          <div class="ubw"><div class="ub" id="upb"></div></div>
+        </div>
+        <label class="tr">
+          <span class="tog"><input type="checkbox" id="recursive" checked><div class="tt"><div class="tb"></div></div></span>
+          Scan subdirectories
+        </label>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="card">
+      <div class="ch">⚙ Options</div>
+      <div class="cb">
+        <div>
+          <label class="fl">Match threshold</label>
+          <div class="sr"><input type="range" id="threshold" min="0" max="100" value="55">
+            <span class="sv" id="tv">55</span></div>
+        </div>
+        <div>
+          <label class="fl">Duration tolerance (seconds)</label>
+          <input type="number" id="tolerance" value="1.0" min="0" step="0.1" style="width:110px">
+        </div>
+        <label class="tr">
+          <span class="tog"><input type="checkbox" id="microsec-tog"><div class="tt"><div class="tb"></div></div></span>
+          <span>Microsecond Compare&nbsp;<span style="color:var(--faint);font-size:11px">(3:42.54)</span></span>
+        </label>
+        <div>
+          <label class="fl">Rename Format</label>
+          <select id="fmt-select">
+            <option value="001 - Title - Artist">001 - Title - Artist</option>
+            <option value="001 - Artist - Title">001 - Artist - Title</option>
+            <option value="Title - Artist">Title - Artist</option>
+            <option value="Artist - Title">Artist - Title</option>
+            <option value="001 - Title">001 - Title</option>
+            <option value="001 - Artist">001 - Artist</option>
+            <option value="Title">Title only</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input type="text" id="fmt-custom" placeholder="{idx:03d} - {title} - {artist}{ext}"
+                 style="display:none;margin-top:6px">
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-p btn-full" id="btn-analyse" disabled>▶  Analyse</button>
+    <div class="ar">
+      <button class="btn btn-s" id="btn-rename" disabled>✏ Rename</button>
+      <button class="btn btn-s disabled" id="btn-report">⬇ Report</button>
+    </div>
+    <button class="btn btn-s btn-full disabled" id="btn-report-missing" style="margin-top:7px">
+      ⬇ Missing / Extra Report (.csv)
+    </button>
+    <button class="btn btn-s btn-full disabled" id="btn-download-zip" style="margin-top:7px">
+      ⬇ Download Renamed Files (.zip)
+    </button>
+
+  </aside>
+
+  <main class="main">
+
+    <!-- Summary pills -->
+    <div class="summary" id="summary" style="display:none">
+      <div class="pill p-dim"  data-filter="all">
+        <div><div class="pn" id="s-total">0</div><div class="pl">Total</div></div>
+      </div>
+      <div class="pill p-ok"   data-filter="matched">
+        <div><div class="pn" id="s-matched">0</div><div class="pl">Matched</div></div>
+      </div>
+      <div class="pill p-bad"  data-filter="mismatched">
+        <div><div class="pn" id="s-mismatch">0</div><div class="pl">Mismatched &gt;1s</div></div>
+      </div>
+      <div class="pill p-warn" data-filter="unmatched" title="On the sheet, but no file has been uploaded for it">
+        <div><div class="pn" id="s-unmatched">0</div><div class="pl">Not Uploaded</div></div>
+      </div>
+      <div class="pill p-warn" id="pill-not-on-sheet" title="Uploaded, but doesn't match any row on the sheet">
+        <div><div class="pn" id="s-not-on-sheet">0</div><div class="pl">Extra Uploaded</div></div>
+      </div>
+    </div>
+
+
+
+    <!-- Results table -->
+    <div id="results-area" style="flex:1">
+      <div class="empty"><div class="ei">🎵</div><p>Results appear here after analysis.</p></div>
+    </div>
+
+    <!-- Unmatched audio files -->
+    <div class="unm-section" id="unm-section" style="display:none">
+      <div class="unm-head" id="unm-toggle">
+        <span class="unm-title">🎵 Extra Uploaded Files (not on the sheet)</span>
+        <span class="unm-count" id="unm-count">0</span>
+        <span id="unm-chevron" style="color:var(--dim);font-size:11px">▼</span>
+      </div>
+      <div id="unm-body" class="unm-body" style="display:none"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- File-path modal -->
+<div class="modal-overlay" id="file-modal" style="display:none">
+  <div class="modal-box">
+    <div class="mh"><h3>Full File Path</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-modal">✕</button></div>
+    <div class="mb">
+      <div class="mp" id="modal-path"></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-s btn-sm" id="btn-copy">📋 Copy Path</button>
+        <span class="cc" id="cc">✓ Copied!</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reassign overlay -->
+<div class="ov" id="rov" style="display:none">
+  <div class="panel">
+    <div class="ph"><h3>Reassign File</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-rov">✕</button></div>
+    <div class="pb">
+      <p class="pt" id="rov-track"></p>
+      <ul class="cl" id="cand-list"></ul>
+      <p id="cand-empty" style="display:none;color:var(--faint);font-size:12px">No candidates found.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Assign-unmatched modal -->
+<div class="modal-overlay" id="assign-modal" style="display:none">
+  <div class="modal-box" id="assign-modal">
+    <div class="mh"><h3>Assign to Sheet Row</h3>
+      <button class="btn btn-s btn-sm" id="btn-close-assign">✕</button></div>
+    <div class="mb">
+      <p style="font-size:12px;color:var(--dim);margin-bottom:12px" id="assign-file-name"></p>
+      <div class="arow">
+        <label style="font-size:12px;color:var(--dim);flex-shrink:0">Assign to:</label>
+        <select id="assign-row-select"></select>
+      </div>
+      <button class="btn btn-p btn-full" id="btn-confirm-assign" style="margin-top:12px">✓ Confirm Assignment</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Session ────────────────────────────────────────────────────────── */
+let SID = localStorage.getItem('sdm_sid');
+if (!SID) {
+  SID = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  localStorage.setItem('sdm_sid', SID);
+}
+const H = { 'X-Session-Id': SID };
+
+/* ── State ──────────────────────────────────────────────────────────── */
+let allResults   = [];
+let unmatchedAudio = [];
+let activeFilter = 'all';
+let activeReassignRow = null;
+let pendingAssignFile = null;
+let csvFile = null;
+let uploadedDir = '';
+let sortCol = null;      // key of column to sort by
+let sortAsc = true;      // true for asc, false for desc
+let colFilters = {};     // maps column keys to filter queries
+
+/* ── Refs ───────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const getMicro  = () => $('microsec-tog').checked;
+const getTol = () => {
+  const v = parseFloat($('tolerance').value);
+  return isNaN(v) ? 1.0 : v;   // only fall back on invalid input, never on 0
+};
+
+/* ── Status ─────────────────────────────────────────────────────────── */
+function setStatus(msg, loading=false) {
+  $('spinner').style.display = loading ? 'block' : 'none';
+  $('st').textContent = msg;
+}
+
+/* ── Duration helpers ───────────────────────────────────────────────── */
+function fmtDur(sec) {
+  if (sec == null) return '—';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return getMicro() ? `${m}:${s.toFixed(2).padStart(5,'0')}` : `${m}:${String(Math.floor(s)).padStart(2,'0')}`;
+}
+
+/* Effective diff for display — uses floor when microsecond compare is OFF */
+function effDiff(r) {
+  if (r.diff == null) return null;
+  if (getMicro()) return r.diff;
+  if (r.file_dur != null && r.spotify_dur != null)
+    return Math.floor(r.file_dur) - Math.floor(r.spotify_dur);
+  return Math.round(r.diff);
+}
+
+function fmtDiff(r) {
+  const d = effDiff(r);
+  if (d == null) return 'N/A';
+  return (d >= 0 ? '+' : '') + (getMicro() ? d.toFixed(2)+'s' : d+'s');
+}
+
+/* Effective flag — recomputed client-side on toggle */
+function effFlag(r) {
+  const d = effDiff(r);
+  if (d == null) return false;
+  return Math.abs(d) > getTol();
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────── */
+function accClass(s) { return s>=90?'acc-hi':s>=65?'acc-mid':'acc-lo'; }
+function rowClass(r) {
+  if (r.status==='UNMATCHED') return 'row-warn';
+  if (effFlag(r)||r.status==='MISMATCH'||r.status==='READ_ERROR') return 'row-bad';
+  return 'row-ok';
+}
+function sBadge(r) {
+  const map={OK:'s-ok',MISMATCH:'s-mis',UNMATCHED:'s-unm',MANUAL:'s-man',READ_ERROR:'s-err',INFO_ONLY:'s-inf'};
+  return `<span class="sbadge ${map[r.status]||'s-inf'}">${esc(r.status)}</span>`;
+}
+function bn(p){ return p ? p.replace(/\\/g,'/').split('/').pop() : '—'; }
+
+/* ── Filter logic ───────────────────────────────────────────────────── */
+function cntFor(f) {
+  if (f==='all')        return allResults.length;
+  if (f==='matched')    return allResults.filter(r=>!!r.matched_file && !effFlag(r)).length;
+  if (f==='mismatched') return allResults.filter(r=>!!r.matched_file && effFlag(r)).length;
+  if (f==='unmatched')  return allResults.filter(r=>!r.matched_file).length;
+  return 0;
+}
+function applyFilter(rows) {
+  if (activeFilter==='matched')    return rows.filter(r=>!!r.matched_file && !effFlag(r));
+  if (activeFilter==='mismatched') return rows.filter(r=>!!r.matched_file && effFlag(r));
+  if (activeFilter==='unmatched')  return rows.filter(r=>!r.matched_file);
+  return rows;
+}
+function setFilter(f) {
+  activeFilter = f;
+  document.querySelectorAll('.pill').forEach(p=>p.classList.toggle('active',p.dataset.filter===f));
+  renderTable();
+}
+
+/* ── Summary ────────────────────────────────────────────────────────── */
+function renderSummary() {
+  const n=allResults.length, m=cntFor('matched'), mis=cntFor('mismatched'), u=cntFor('unmatched');
+  $('s-total').textContent   = n;
+  $('s-matched').textContent = m;
+  $('s-mismatch').textContent= mis;
+  $('s-unmatched').textContent=u;
+  $('s-not-on-sheet').textContent = unmatchedAudio.length;
+  $('summary').style.display    = 'flex';
+}
+
+/* ── Table render ───────────────────────────────────────────────────── */
+const COLUMNS = [
+  { label: '#', key: 'sheet_row', type: 'num' },
+  { label: 'Track Title', key: 'track_title', type: 'str' },
+  { label: 'Artist', key: 'artist_name', type: 'str' },
+  { label: 'Spotify', key: 'spotify_dur', type: 'dur' },
+  { label: 'File', key: 'file_dur', type: 'dur' },
+  { label: 'Diff', key: 'diff', type: 'diff' },
+  { label: '>1s', key: 'flag_gt1s', type: 'bool' },
+  { label: 'Accuracy', key: 'match_score', type: 'num' },
+  { label: 'Status', key: 'status', type: 'str' },
+  { label: 'Matched File', key: 'matched_filename', type: 'str' }
+];
+
+function renderTable() {
+  renderTableStructure();
+  updateTableBody();
+}
+
+function renderTableStructure() {
+  const area = $('results-area');
+  
+  if (area.querySelector('table')) {
+    return;
+  }
+  
+  if (!allResults.length) {
+    area.innerHTML='<div class="empty"><div class="ei">🔍</div><p>No results found.</p></div>';
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className='tw';
+  const t=document.createElement('table');
+  
+  let thHtml = '';
+  COLUMNS.forEach(col => {
+    thHtml += `
+      <th>
+        <div class="th-content">
+          <div class="th-label-row" data-key="${col.key}">
+            <span>${col.label}</span>
+            <span class="sort-icon" id="sort-icon-${col.key}">↕</span>
+          </div>
+          <input type="text" class="col-filter" data-key="${col.key}" placeholder="Filter...">
+        </div>
+      </th>
+    `;
+  });
+  thHtml += '<th></th>';
+  
+  t.innerHTML=`<thead><tr>${thHtml}</tr></thead><tbody id="tbody"></tbody>`;
+  wrap.appendChild(t);
+  area.innerHTML='';
+  area.appendChild(wrap);
+
+  t.querySelectorAll('.th-label-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const key = row.dataset.key;
+      if (sortCol === key) {
+        if (sortAsc) {
+          sortAsc = false;
+        } else {
+          sortCol = null;
+          sortAsc = true;
+        }
+      } else {
+        sortCol = key;
+        sortAsc = true;
+      }
+      updateSortIcons();
+      updateTableBody();
+    });
+  });
+
+  t.querySelectorAll('.col-filter').forEach(input => {
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('input', () => {
+      colFilters[input.dataset.key] = input.value.trim().toLowerCase();
+      updateTableBody();
+    });
+  });
+}
+
+function updateSortIcons() {
+  COLUMNS.forEach(col => {
+    const icon = $(`sort-icon-${col.key}`);
+    if (!icon) return;
+    if (sortCol === col.key) {
+      icon.textContent = sortAsc ? '▲' : '▼';
+    } else {
+      icon.textContent = '↕';
+    }
+  });
+}
+
+function updateTableBody() {
+  const tbody = $('tbody');
+  if (!tbody) return;
+
+  let filtered = applyFilter(allResults);
+
+  Object.keys(colFilters).forEach(key => {
+    const q = colFilters[key];
+    if (!q) return;
+
+    filtered = filtered.filter(r => {
+      let val = '';
+      if (key === 'sheet_row') val = String(r.sheet_row);
+      else if (key === 'track_title') val = r.track_title;
+      else if (key === 'artist_name') val = r.artist_name;
+      else if (key === 'spotify_dur') val = fmtDur(r.spotify_dur);
+      else if (key === 'file_dur') val = fmtDur(r.file_dur);
+      else if (key === 'diff') val = fmtDiff(r);
+      else if (key === 'flag_gt1s') val = effFlag(r) ? 'yes' : 'no';
+      else if (key === 'match_score') val = String(r.match_score) + '%';
+      else if (key === 'status') val = r.status;
+      else if (key === 'matched_filename') {
+        const fp = r.matched_file || '';
+        val = r.matched_filename || bn(fp);
+      }
+      return String(val || '').toLowerCase().includes(q);
+    });
+  });
+
+  if (sortCol) {
+    const colConfig = COLUMNS.find(c => c.key === sortCol);
+    filtered.sort((a, b) => {
+      let valA = a[sortCol];
+      let valB = b[sortCol];
+
+      if (sortCol === 'flag_gt1s') {
+        valA = effFlag(a);
+        valB = effFlag(b);
+      }
+      if (sortCol === 'diff') {
+        valA = effDiff(a);
+        valB = effDiff(b);
+      }
+
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return 1;
+      if (valB == null) return -1;
+
+      if (colConfig.type === 'num' || colConfig.type === 'dur' || colConfig.type === 'diff') {
+        return sortAsc ? (valA - valB) : (valB - valA);
+      } else if (colConfig.type === 'bool') {
+        return sortAsc ? (valA === valB ? 0 : valA ? 1 : -1) : (valA === valB ? 0 : valA ? -1 : 1);
+      } else {
+        const strA = String(valA).toLowerCase();
+        const strB = String(valB).toLowerCase();
+        return sortAsc ? strA.localeCompare(strB) : strB.localeCompare(strA);
+      }
+    });
+  }
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="${COLUMNS.length + 1}" style="text-align:center;padding:30px;color:var(--faint);">No matching rows found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = '';
+  filtered.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.className = rowClass(r);
+    const fp = r.matched_file || '', fname = r.matched_filename || bn(fp);
+    const score = r.match_score || 0;
+    const flag = effFlag(r);
+    tr.innerHTML = `
+      <td class="mono dim">${r.sheet_row}</td>
+      <td>${esc(r.track_title)}</td>
+      <td class="dim">${esc(r.artist_name)}</td>
+      <td class="mono">${fmtDur(r.spotify_dur)}</td>
+      <td class="mono">${fmtDur(r.file_dur)}</td>
+      <td class="mono">${fmtDiff(r)}</td>
+      <td>${flag ? '<span class="flag-badge">YES</span>' : '<span style="color:var(--dim);font-size:11px">NO</span>'}</td>
+      <td><span class="acc ${accClass(score)}">${score}%</span></td>
+      <td>${sBadge(r)}</td>
+      <td><span class="fn" title="${esc(fp)}" data-fp="${esc(fp)}">${esc(fname)}</span></td>
+      <td><button class="btn btn-s btn-sm btn-ra" data-row="${r.sheet_row}"
+            data-title="${esc(r.track_title)}" data-artist="${esc(r.artist_name)}">✏</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('.fn').forEach(c => c.addEventListener('click', () => showFileModal(c.dataset.fp)));
+  tbody.querySelectorAll('.btn-ra').forEach(b => b.addEventListener('click', () =>
+    openReassign(+b.dataset.row, b.dataset.title, b.dataset.artist)));
+}
+
+/* ── Unmatched audio section ────────────────────────────────────────── */
+function renderUnmatched(files) {
+  unmatchedAudio = files;
+  const sec=$('unm-section');
+  $('unm-count').textContent=files.length;
+  sec.style.display = files.length ? 'block' : 'none';
+
+  const body=$('unm-body');
+  if (!files.length) { body.innerHTML=''; return; }
+
+  if (!files.length) { body.innerHTML='<div class="unm-empty">All audio files were matched.</div>'; return; }
+
+  body.innerHTML='';
+  files.forEach(f=>{
+    const row=document.createElement('div');
+    row.className='unm-row';
+    const isNotInCsv = f.match_status === 'NOT_IN_CSV';
+    const badgeHtml = isNotInCsv
+      ? `<span class="sbadge s-mis">Not in CSV</span>`
+      : `<span class="sbadge s-unm">No Match Found (${f.best_match_score || 0}%)</span>`;
+    row.innerHTML=`
+      <span class="unm-fn" title="${esc(f.path)}">${esc(f.filename)}</span>
+      ${badgeHtml}
+      <span class="unm-dur">${fmtDurPlain(f.duration)}</span>
+      <button class="btn btn-s btn-sm btn-assign"
+        data-path="${esc(f.path)}" data-fname="${esc(f.filename)}">Assign ›</button>`;
+    row.querySelector('.btn-assign').addEventListener('click', ()=>openAssign(f.path, f.filename));
+    body.appendChild(row);
+  });
+}
+
+function fmtDurPlain(sec) {
+  if (sec==null) return '—';
+  const m=Math.floor(sec/60), s=Math.floor(sec%60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+/* Toggle unmatched section */
+$('unm-toggle').addEventListener('click',()=>{
+  const body=$('unm-body');
+  const open=body.style.display!=='none';
+  body.style.display=open?'none':'block';
+  $('unm-chevron').textContent=open?'▼':'▲';
+});
+
+/* ── Full render ────────────────────────────────────────────────────── */
+function renderResults(data) {
+  allResults = data.results || [];
+  renderUnmatched(data.unmatched_files || []);
+  renderSummary();
+  setFilter(activeFilter);
+}
+
+/* ── Precision toggle re-render ─────────────────────────────────────── */
+$('microsec-tog').addEventListener('change',()=>{
+  if (!allResults.length) return;
+  renderSummary();
+  updateTableBody();
+});
+$('tolerance').addEventListener('input',()=>{
+  if (!allResults.length) return;
+  renderSummary();
+  updateTableBody();
+});
+
+/* ── CSV drag-drop ──────────────────────────────────────────────────── */
+const cz=$('csv-zone'), ci=$('csv-input');
+cz.addEventListener('dragover',e=>{e.preventDefault();cz.classList.add('over')});
+cz.addEventListener('dragleave',()=>cz.classList.remove('over'));
+cz.addEventListener('drop',e=>{
+  e.preventDefault();cz.classList.remove('over');
+  const f=e.dataTransfer.files[0];
+  if(f&&(f.name.endsWith('.csv')||f.type==='text/csv'))setCSV(f);
+  else setStatus('⚠ Please drop a .csv file.');
+});
+ci.addEventListener('change',()=>{if(ci.files[0])setCSV(ci.files[0])});
+function setCSV(f){
+  csvFile=f;cz.classList.add('got');
+  $('dz-i').style.display=$('dz-l').style.display=$('dz-h').style.display='none';
+  const c=$('csv-chosen');c.style.display='block';c.textContent='✓  '+f.name;
+  refreshAnalyseGate();
+}
+
+/* ── Threshold slider ───────────────────────────────────────────────── */
+$('threshold').addEventListener('input',function(){$('tv').textContent=this.value});
+
+/* ── Rename format toggle ───────────────────────────────────────────── */
+$('fmt-select').addEventListener('change',function(){
+  $('fmt-custom').style.display=this.value==='custom'?'block':'none';
+});
+
+/* ── Filter pills & tabs ────────────────────────────────────────────── */
+document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('click',()=>setFilter(p.dataset.filter)));
+
+/* "Not on Sheet" pill isn't a table filter — it opens the section below
+   that lists uploaded files with no matching sheet row. */
+$('pill-not-on-sheet').addEventListener('click', () => {
+  const body = $('unm-body');
+  body.style.display = 'block';
+  $('unm-chevron').textContent = '▲';
+  $('unm-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+/* ── Audio browse + upload ──────────────────────────────────────────── */
+const fif=$('fi-folder'),fii=$('fi-files');
+fif.setAttribute('webkitdirectory','');
+$('btn-bf').addEventListener('click',()=>fif.click());
+$('btn-fi').addEventListener('click',()=>fii.click());
+fif.addEventListener('change',()=>handleFiles(fif.files));
+fii.addEventListener('change',()=>handleFiles(fii.files));
+
+/* Large selections (80-90+ tracks) upload as several small requests instead
+   of one giant one. That keeps each request fast and reliable on free
+   hosting, gives an accurate progress bar, and means one failed/slow chunk
+   only needs a small retry instead of re-sending everything from scratch. */
+const CHUNK_MAX_FILES   = 5;
+const CHUNK_MAX_BYTES   = 15*1024*1024;
+const CHUNK_CONCURRENCY = 2;
+
+let uploadInProgress = false;   // true while any chunk is still in flight
+let uploadComplete   = false;   // true only once every chunk has succeeded
+
+function makeChunks(files){
+  const chunks=[];let cur=[],curBytes=0;
+  for(const f of files){
+    if(cur.length&&(cur.length>=CHUNK_MAX_FILES||curBytes+f.size>CHUNK_MAX_BYTES)){
+      chunks.push(cur);cur=[];curBytes=0;
+    }
+    cur.push(f);curBytes+=f.size;
+  }
+  if(cur.length)chunks.push(cur);
+  return chunks;
+}
+
+function uploadChunk(files,reset,onProgress){
+  return new Promise((ok,fail)=>{
+    const fd=new FormData();
+    files.forEach(f=>fd.append('audio_files',f,f.name));
+    if(reset)fd.append('reset','true');
+    const xhr=new XMLHttpRequest();
+    xhr.timeout=90000;   // generous: free-tier hosting can take ~30-60s to wake from idle
+    xhr.upload.addEventListener('progress',e=>{if(e.lengthComputable&&onProgress)onProgress(e.loaded)});
+    xhr.onload=()=>{
+      let data;
+      try{data=JSON.parse(xhr.responseText)}
+      catch(_){fail(new Error(`Server returned an unexpected response (status ${xhr.status}).`));return}
+      if(xhr.status<200||xhr.status>=300||data.error){
+        fail(new Error(data.error||`Upload failed (status ${xhr.status}).`));return;
+      }
+      ok(data);
+    };
+    // A raw connection-level failure previously rejected with the bare
+    // Event object, so e.message was undefined — hence "Upload failed:
+    // undefined". Always reject with a real Error with a real message.
+    xhr.onerror=()=>fail(new Error('Network error during upload — check your connection and try again.'));
+    xhr.ontimeout=()=>fail(new Error('Upload timed out — free hosting can take up to a minute to wake up, please try again.'));
+    xhr.open('POST','/api/upload-audio');
+    Object.entries(H).forEach(([k,v])=>xhr.setRequestHeader(k,v));
+    xhr.send(fd);
+  });
+}
+
+async function handleFiles(list){
+  if(!list||!list.length)return;
+  const exts=new Set(['.mp3','.flac','.wav','.aac','.m4a','.ogg','.opus','.wma','.ape','.aiff','.alac']);
+  const audio=Array.from(list).filter(f=>exts.has('.'+f.name.split('.').pop().toLowerCase()));
+  if(!audio.length){setStatus('No audio files found in selection.');return}
+
+  const chunks=makeChunks(audio);
+  const totalBytes=audio.reduce((s,f)=>s+f.size,0);
+  const chunkLoaded=new Array(chunks.length).fill(0);
+  let uploadedFiles=0;
+
+  uploadInProgress=true;uploadComplete=false;uploadedDir='';
+  $('audio-dir').value='';$('audio-dir').readOnly=false;
+  $('btn-unlock-dir').style.display='none';
+  $('us').style.display='block';$('upb').style.width='0%';$('um').style.color='';
+  $('um').textContent=`Uploading 0/${audio.length} files…`;
+  refreshAnalyseGate();
+  setStatus(`Uploading ${audio.length} audio files…`,true);
+
+  const updateProgress=()=>{
+    const sent=chunkLoaded.reduce((a,b)=>a+b,0);
+    const pct=totalBytes?Math.round(sent/totalBytes*100):0;
+    $('upb').style.width=pct+'%';
+    $('um').textContent=`Uploading ${uploadedFiles}/${audio.length} files (${pct}%)…`;
+  };
+
+  async function sendChunk(i){
+    const files=chunks[i];
+    const track=loaded=>{chunkLoaded[i]=loaded;updateProgress()};
+    let data;
+    try{
+      data=await uploadChunk(files,i===0,track);
+    }catch(firstErr){
+      await new Promise(r=>setTimeout(r,800));   // brief pause, then one retry
+      data=await uploadChunk(files,i===0,track);
+    }
+    chunkLoaded[i]=files.reduce((s,f)=>s+f.size,0);
+    uploadedFiles+=files.length;
+    uploadedDir=data.audio_dir;
+    updateProgress();
+  }
+
+  try{
+    await sendChunk(0);   // sent alone: carries reset=true, must land before the rest
+    let next=1;
+    const worker=async()=>{while(next<chunks.length){const i=next++;await sendChunk(i)}};
+    await Promise.all(Array.from({length:Math.min(CHUNK_CONCURRENCY,Math.max(0,chunks.length-1))},worker));
+
+    uploadComplete=true;
+    $('audio-dir').value=uploadedDir;$('audio-dir').readOnly=true;
+    $('btn-unlock-dir').style.display='inline-flex';
+    $('upb').style.width='100%';$('um').style.color='var(--green)';
+    $('um').textContent=`✓ ${uploadedFiles} files ready`;
+    setStatus(`${uploadedFiles} audio files ready.`);
+  }catch(e){
+    $('um').style.color='var(--red)';$('um').textContent='✗ '+e.message;
+    setStatus('Upload failed: '+e.message);
+  }finally{
+    uploadInProgress=false;
+    $('spinner').style.display='none';
+    refreshAnalyseGate();
+  }
+}
+
+/* Lets someone fall back to typing a path by hand (e.g. running the tool
+   locally) instead of uploading through the browser. */
+$('btn-unlock-dir').addEventListener('click',()=>{
+  uploadedDir='';uploadComplete=false;
+  $('audio-dir').value='';$('audio-dir').readOnly=false;$('audio-dir').focus();
+  $('btn-unlock-dir').style.display='none';
+  $('us').style.display='none';
+  refreshAnalyseGate();
+});
+$('audio-dir').addEventListener('input',refreshAnalyseGate);
+$('sheet-id').addEventListener('input',refreshAnalyseGate);
+
+/* ── Analyse readiness gate ────────────────────────────────────────────
+   Keeps btn-analyse disabled until a sheet source AND a complete audio
+   source are both present, and reflects what's still missing in the
+   header status line. */
+function refreshAnalyseGate(){
+  const haveSheet=!!csvFile||!!$('sheet-id').value.trim();
+  const typedPath=!uploadedDir&&!!$('audio-dir').value.trim();
+  const haveAudio=(uploadComplete&&!!uploadedDir)||typedPath;
+  $('btn-analyse').disabled=!(haveSheet&&haveAudio&&!uploadInProgress);
+  if(uploadInProgress)return;   // the upload flow owns the status line while active
+  if(!haveSheet&&!haveAudio)setStatus('Load a CSV and choose an audio source, then click Analyse.');
+  else if(!haveSheet)setStatus('⚠ Load a CSV or enter a Sheet ID to continue.');
+  else if(!haveAudio)setStatus('⚠ Select or upload audio files to continue.');
+  else setStatus('✓ Ready — click Analyse to begin.');
+}
+
+/* ── Wake the free-tier server on load ─────────────────────────────────
+   Render's free tier sleeps after 15 min idle and can take up to a minute
+   to respond to the first request. Ping proactively so that "slow" reads
+   as "waking up" instead of "broken", and so real uploads land on an
+   already-warm server. */
+(async function pingServer(){
+  const slow=setTimeout(()=>{
+    if(!uploadInProgress)setStatus('Waking up the server — free hosting can take up to a minute after being idle…',true);
+  },2500);
+  try{ await fetch('/api/health',{headers:H}); }
+  catch(_){ /* surfaces naturally once the user takes an action */ }
+  finally{
+    clearTimeout(slow);
+    $('spinner').style.display='none';
+    refreshAnalyseGate();
+  }
+})();
+
+/* ── File download via fetch+blob ──────────────────────────────────────
+   Plain <a href> navigation cannot send the X-Session-Id header, so any
+   session-scoped download MUST go through fetch() + Blob instead — this
+   is the only way the server can find the right session's data. ──────── */
+async function downloadViaFetch(url, fallbackName, button) {
+  const original = button ? button.textContent : null;
+  if (button) { button.disabled = true; button.textContent = '⏳ Preparing…'; }
+  setStatus('Preparing download…', true);
+  try {
+    const res = await fetch(url, { headers: H });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { const body = await res.json(); if (body.error) msg = body.error; } catch(_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    let filename = fallbackName;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const m = disposition.match(/filename="?([^";]+)"?/);
+    if (m) filename = m[1];
+
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    setStatus(`✓ Downloaded ${filename}`);
+  } catch (e) {
+    setStatus('Download failed: ' + e.message);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = original; }
+    $('spinner').style.display = 'none';
+  }
+}
+
+$('btn-report').addEventListener('click', () => {
+  downloadViaFetch('/api/report', 'duration_report.csv', $('btn-report'));
+});
+
+$('btn-report-missing').addEventListener('click', () => {
+  downloadViaFetch('/api/report-missing', 'missing_extra.csv', $('btn-report-missing'));
+});
+
+$('btn-download-zip').addEventListener('click', () => {
+  downloadViaFetch('/api/download-renamed-zip', 'renamed_audio.zip', $('btn-download-zip'));
+});
+
+/* ── Analyse ────────────────────────────────────────────────────────── */
+$('btn-analyse').addEventListener('click',async()=>{
+  sortCol = null;
+  sortAsc = true;
+  colFilters = {};
+  $('results-area').innerHTML = '';
+
+  const sid=$('sheet-id').value.trim();
+  const dir=$('audio-dir').value.trim()||uploadedDir;
+  const rec=$('recursive').checked;
+  const thr=+$('threshold').value;
+  const tol=getTol();
+  const mic=getMicro();
+  if(!csvFile&&!sid){setStatus('⚠ Drop a CSV or enter a Sheet ID first.');return}
+  if(!dir){setStatus('⚠ Enter a folder path or select audio files.');return}
+  $('btn-analyse').disabled=true;
+  setStatus('Running analysis…',true);
+  $('summary').style.display='none';
+  $('btn-download-zip').classList.add('disabled');
+  $('btn-report-missing').classList.add('disabled');
+  try{
+    let res;
+    if(csvFile){
+      const fd=new FormData();
+      fd.append('csv_file',csvFile,csvFile.name);
+      fd.append('audio_dir',dir);fd.append('recursive',rec);
+      fd.append('threshold',thr);fd.append('tolerance',tol);
+      fd.append('use_microseconds',mic);
+      res=await fetch('/api/analyse-csv',{method:'POST',headers:H,body:fd});
+    }else{
+      res=await fetch('/api/analyse',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+        body:JSON.stringify({sheet_id:sid,audio_dir:dir,recursive:rec,threshold:thr,tolerance:tol,use_microseconds:mic})});
+    }
+    const data=await res.json();
+    if(!res.ok||data.error){setStatus('Error: '+(data.error||res.statusText));return}
+    renderResults(data);
+    const n=data.results.length;
+    setStatus(`Done — ${n} tracks · ${cntFor('matched')} matched · ${cntFor('mismatched')} mismatched · ${cntFor('unmatched')} unmatched`);
+    $('btn-rename').disabled=false;
+    $('btn-report').classList.remove('disabled');
+    $('btn-report-missing').classList.remove('disabled');
+  }catch(e){setStatus('Network error: '+e.message);}
+  finally{$('btn-analyse').disabled=false;$('spinner').style.display='none'}
+});
+
+/* ── Rename ─────────────────────────────────────────────────────────── */
+$('btn-rename').addEventListener('click',async()=>{
+  const fmt=$('fmt-select').value;
+  const custom=$('fmt-custom').value.trim();
+  const label=fmt==='custom'?'custom format':fmt;
+  if(fmt==='custom'&&!custom){setStatus('⚠ Enter a custom template first.');return}
+  if(!confirm(`Rename matched files using: ${label}?`))return;
+  setStatus('Renaming…',true);$('btn-rename').disabled=true;
+  try{
+    const res=await fetch('/api/rename',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({format_name:fmt,custom_template:fmt==='custom'?custom:''})});
+    const data=await res.json();
+    if(data.error){setStatus('Rename error: '+data.error);return}
+    renderResults(data);
+    const st=data.rename_stats||{};
+    const renamed=st.renamed||0, same=st.skipped_same_name||0,
+          notFound=st.skipped_not_found||0, destExists=st.skipped_dest_exists||0,
+          errs=(st.errors||[]).length;
+
+    const anyDownloadable = allResults.some(r => r.matched_file);
+    if (anyDownloadable) $('btn-download-zip').classList.remove('disabled');
+
+    if(renamed===0 && (notFound>0||destExists>0||errs>0)){
+      const reasons=[];
+      if(notFound>0)   reasons.push(`${notFound} file(s) not found on disk`);
+      if(destExists>0) reasons.push(`${destExists} name collision(s)`);
+      if(errs>0)       reasons.push(`${errs} error(s)`);
+      setStatus(`⚠ 0 files renamed — ${reasons.join(', ')}.`);
+    }else if(renamed===0 && same>0){
+      setStatus(`Already correctly named. Use "Download Renamed Files" to get them.`);
+    }else{
+      let msg=`✓ ${renamed} file(s) renamed. Click "Download Renamed Files" to get them.`;
+      if(same>0)       msg+=` (${same} already correct.)`;
+      if(notFound>0)   msg+=` ${notFound} not found.`;
+      if(destExists>0) msg+=` ${destExists} skipped (collision).`;
+      setStatus(msg);
+    }
+  }catch(e){setStatus('Rename failed: '+e.message);}
+  finally{$('btn-rename').disabled=false;$('spinner').style.display='none'}
+});
+
+/* ── File-path modal ────────────────────────────────────────────────── */
+function showFileModal(path){
+  if(!path)return;$('modal-path').textContent=path;
+  $('cc').style.display='none';$('file-modal').style.display='flex';
+}
+$('btn-close-modal').addEventListener('click',()=>$('file-modal').style.display='none');
+$('file-modal').addEventListener('click',e=>{if(e.target===$('file-modal'))$('file-modal').style.display='none'});
+$('btn-copy').addEventListener('click',()=>{
+  navigator.clipboard.writeText($('modal-path').textContent).then(()=>{
+    const c=$('cc');c.style.display='inline';setTimeout(()=>c.style.display='none',2000);
+  });
+});
+
+/* ── Reassign overlay ───────────────────────────────────────────────── */
+async function openReassign(row,title,artist){
+  activeReassignRow=row;
+  $('rov-track').textContent=`${title}  ·  ${artist}`;
+  $('cand-list').innerHTML='<li style="color:var(--faint);font-size:12px;padding:8px 0">Searching…</li>';
+  $('cand-empty').style.display='none';$('rov').style.display='flex';
+  try{
+    const res=await fetch('/api/candidates',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:row,top_n:5})});
+    const data=await res.json();
+    const list=$('cand-list');list.innerHTML='';
+    if(!data.candidates||!data.candidates.length){$('cand-empty').style.display='block';return}
+    data.candidates.forEach(c=>{
+      const li=document.createElement('li');li.className='ci';li.title=c.path;
+      li.innerHTML=`<span class="cs">${c.score}%</span><span class="cn">${esc(bn(c.path))}</span><span class="cd">${fmtDurPlain(c.duration)}</span>`;
+      li.addEventListener('click',()=>doReassign(c.path));
+      list.appendChild(li);
+    });
+  }catch(e){$('cand-list').innerHTML=`<li style="color:var(--red)">${esc(e.message)}</li>`}
+}
+async function doReassign(fp){
+  $('rov').style.display='none';setStatus('Reassigning…',true);
+  try{
+    const res=await fetch('/api/reassign',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:activeReassignRow,file_path:fp,tolerance:getTol(),use_microseconds:getMicro()})});
+    const data=await res.json();
+    if(data.error){setStatus('Reassign error: '+data.error);return}
+    renderResults(data);setStatus('File reassigned.');
+  }catch(e){setStatus('Reassign failed: '+e.message);}
+  finally{$('spinner').style.display='none'}
+}
+$('btn-close-rov').addEventListener('click',()=>$('rov').style.display='none');
+$('rov').addEventListener('click',e=>{if(e.target===$('rov'))$('rov').style.display='none'});
+
+/* ── Assign unmatched ───────────────────────────────────────────────── */
+function openAssign(path, fname){
+  pendingAssignFile=path;
+  $('assign-file-name').textContent='File: '+fname;
+  const sel=$('assign-row-select');sel.innerHTML='';
+  allResults.filter(r=>r.status==='UNMATCHED').forEach(r=>{
+    const o=document.createElement('option');
+    o.value=r.sheet_row;
+    o.textContent=`Row ${r.sheet_row}: ${r.track_title} — ${r.artist_name}`;
+    sel.appendChild(o);
+  });
+  if(!sel.options.length){
+    sel.innerHTML='<option disabled>No UNMATCHED rows available</option>';
+    $('btn-confirm-assign').disabled=true;
+  }else{
+    $('btn-confirm-assign').disabled=false;
+  }
+  $('assign-modal').style.display='flex';
+}
+
+$('btn-confirm-assign').addEventListener('click',async()=>{
+  const row=parseInt($('assign-row-select').value);
+  if(!row||!pendingAssignFile)return;
+  $('assign-modal').style.display='none';setStatus('Assigning…',true);
+  try{
+    const res=await fetch('/api/assign-unmatched',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:row,file_path:pendingAssignFile,tolerance:getTol(),use_microseconds:getMicro()})});
+    const data=await res.json();
+    if(data.error){setStatus('Assign error: '+data.error);return}
+    renderResults(data);setStatus('File assigned.');
+  }catch(e){setStatus('Assign failed: '+e.message);}
+  finally{$('spinner').style.display='none'}
+});
+$('btn-close-assign').addEventListener('click',()=>$('assign-modal').style.display='none');
+$('assign-modal').addEventListener('click',e=>{if(e.target===$('assign-modal'))$('assign-modal').style.display='none'});
+</script>
+</body>
+</html>
