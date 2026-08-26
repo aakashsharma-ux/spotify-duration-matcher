@@ -389,6 +389,9 @@ tbody td{padding:10px 14px;vertical-align:middle}
       <button class="btn btn-s" id="btn-rename" disabled>✏ Rename</button>
       <button class="btn btn-s disabled" id="btn-report">⬇ Report</button>
     </div>
+    <button class="btn btn-s btn-full disabled" id="btn-report-missing" style="margin-top:7px">
+      ⬇ Missing / Extra Report (.csv)
+    </button>
     <button class="btn btn-s btn-full disabled" id="btn-download-zip" style="margin-top:7px">
       ⬇ Download Renamed Files (.zip)
     </button>
@@ -409,7 +412,10 @@ tbody td{padding:10px 14px;vertical-align:middle}
         <div><div class="pn" id="s-mismatch">0</div><div class="pl">Mismatched &gt;1s</div></div>
       </div>
       <div class="pill p-warn" data-filter="unmatched">
-        <div><div class="pn" id="s-unmatched">0</div><div class="pl">Unmatched</div></div>
+        <div><div class="pn" id="s-unmatched">0</div><div class="pl">Not Uploaded</div></div>
+      </div>
+      <div class="pill p-warn" id="pill-not-on-sheet" title="Uploaded files with no matching sheet row">
+        <div><div class="pn" id="s-not-on-sheet">0</div><div class="pl">Not on Sheet</div></div>
       </div>
     </div>
 
@@ -423,7 +429,7 @@ tbody td{padding:10px 14px;vertical-align:middle}
     <!-- Unmatched audio files -->
     <div class="unm-section" id="unm-section" style="display:none">
       <div class="unm-head" id="unm-toggle">
-        <span class="unm-title">🎵 Unmatched Audio Files</span>
+        <span class="unm-title">🎵 Uploaded but Not on Sheet</span>
         <span class="unm-count" id="unm-count">0</span>
         <span id="unm-chevron" style="color:var(--dim);font-size:11px">▼</span>
       </div>
@@ -582,6 +588,7 @@ function renderSummary() {
   $('s-matched').textContent = m;
   $('s-mismatch').textContent= mis;
   $('s-unmatched').textContent=u;
+  $('s-not-on-sheet').textContent = unmatchedAudio.length;
   $('summary').style.display    = 'flex';
 }
 
@@ -822,9 +829,9 @@ $('unm-toggle').addEventListener('click',()=>{
 /* ── Full render ────────────────────────────────────────────────────── */
 function renderResults(data) {
   allResults = data.results || [];
+  renderUnmatched(data.unmatched_files || []);
   renderSummary();
   setFilter(activeFilter);
-  renderUnmatched(data.unmatched_files || []);
 }
 
 /* ── Precision toggle re-render ─────────────────────────────────────── */
@@ -866,7 +873,16 @@ $('fmt-select').addEventListener('change',function(){
 });
 
 /* ── Filter pills & tabs ────────────────────────────────────────────── */
-document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click',()=>setFilter(p.dataset.filter)));
+document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('click',()=>setFilter(p.dataset.filter)));
+
+/* "Not on Sheet" pill isn't a table filter — it opens the section below
+   that lists uploaded files with no matching sheet row. */
+$('pill-not-on-sheet').addEventListener('click', () => {
+  const body = $('unm-body');
+  body.style.display = 'block';
+  $('unm-chevron').textContent = '▲';
+  $('unm-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 
 /* ── Audio browse + upload ──────────────────────────────────────────── */
 const fif=$('fi-folder'),fii=$('fi-files');
@@ -1076,6 +1092,10 @@ $('btn-report').addEventListener('click', () => {
   downloadViaFetch('/api/report', 'duration_report.csv', $('btn-report'));
 });
 
+$('btn-report-missing').addEventListener('click', () => {
+  downloadViaFetch('/api/report-missing', 'missing_extra.csv', $('btn-report-missing'));
+});
+
 $('btn-download-zip').addEventListener('click', () => {
   downloadViaFetch('/api/download-renamed-zip', 'renamed_audio.zip', $('btn-download-zip'));
 });
@@ -1099,6 +1119,7 @@ $('btn-analyse').addEventListener('click',async()=>{
   setStatus('Running analysis…',true);
   $('summary').style.display='none';
   $('btn-download-zip').classList.add('disabled');
+  $('btn-report-missing').classList.add('disabled');
   try{
     let res;
     if(csvFile){
@@ -1119,6 +1140,7 @@ $('btn-analyse').addEventListener('click',async()=>{
     setStatus(`Done — ${n} tracks · ${cntFor('matched')} matched · ${cntFor('mismatched')} mismatched · ${cntFor('unmatched')} unmatched`);
     $('btn-rename').disabled=false;
     $('btn-report').classList.remove('disabled');
+    $('btn-report-missing').classList.remove('disabled');
   }catch(e){setStatus('Network error: '+e.message);}
   finally{$('btn-analyse').disabled=false;$('spinner').style.display='none'}
 });

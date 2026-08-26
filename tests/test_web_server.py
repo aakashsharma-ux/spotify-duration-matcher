@@ -386,6 +386,47 @@ class TestReport:
         assert "track_title" in content   # header row present
 
 
+# ── Missing / extra report download ────────────────────────────────────────────
+
+class TestMissingReport:
+    def test_report_missing_empty_returns_400(self, client):
+        fresh = {"X-Session-Id": "fresh-missing-report-session"}
+        r = client.get("/api/report-missing", headers=fresh)
+        assert r.status_code == 400
+
+    def test_report_missing_lists_unuploaded_sheet_rows(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Empty audio dir: nothing uploaded, so both sheet tracks are unmatched.
+            csv_bytes = _minimal_csv()
+            client.post("/api/analyse-csv", headers=auth_headers,
+                        data={"csv_file": (io.BytesIO(csv_bytes), "s.csv"),
+                              "audio_dir": tmp},
+                        content_type="multipart/form-data")
+        r = client.get("/api/report-missing", headers=auth_headers)
+        assert r.status_code == 200
+        assert "text/csv" in r.content_type
+        content = r.data.decode("utf-8")
+        assert "SONGS IN SHEET BUT NOT UPLOADED" in content
+        assert "Stone In My Shoe" in content
+        assert "Flying High" in content
+        assert "SONGS UPLOADED BUT NOT ON SHEET" in content
+
+    def test_report_missing_lists_unmatched_audio(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            # An audio file with a name that won't fuzzy-match either sheet row.
+            extra = Path(tmp) / "Totally Unrelated File - Nobody.mp3"
+            extra.write_bytes(b"\x00" * 10)
+            csv_bytes = _minimal_csv()
+            client.post("/api/analyse-csv", headers=auth_headers,
+                        data={"csv_file": (io.BytesIO(csv_bytes), "s.csv"),
+                              "audio_dir": tmp},
+                        content_type="multipart/form-data")
+            r = client.get("/api/report-missing", headers=auth_headers)
+        assert r.status_code == 200
+        content = r.data.decode("utf-8")
+        assert "Totally Unrelated File" in content
+
+
 # ── Assign-unmatched endpoint ─────────────────────────────────────────────────
 
 class TestAssignUnmatched:

@@ -176,3 +176,77 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+# ── Missing / extra report ──────────────────────────────────────────────────
+# Two-section CSV: sheet rows with no uploaded file ("not uploaded"), and
+# uploaded audio files with no sheet row ("not on sheet"). Shared between the
+# CLI (writes to disk) and the web server (streams to the browser) so both
+# surfaces stay in sync.
+
+NOT_UPLOADED_COLUMNS = [
+    "sheet_row", "track_title", "artist_name", "album",
+    "spotify_link", "spotify_dur",
+]
+NOT_ON_SHEET_COLUMNS = [
+    "filename", "full_path", "duration_sec", "closest_match_score_pct",
+]
+
+
+def _write_missing_sections(
+    fh,
+    match_table: list[dict],
+    unmatched_audio: list[dict],
+) -> None:
+    """Write the two-section missing/extra report body to an open file handle.
+
+    Section 1 lists every sheet row with no matched audio file (in the CSV
+    / sheet, but never uploaded). Section 2 lists every uploaded audio file
+    that wasn't assigned to any sheet row (uploaded, but not on the sheet).
+    """
+    writer = csv.writer(fh)
+
+    not_uploaded = [r for r in match_table if not r.get("matched_file")]
+    writer.writerow(["SONGS IN SHEET BUT NOT UPLOADED"])
+    writer.writerow(NOT_UPLOADED_COLUMNS)
+    for r in not_uploaded:
+        writer.writerow([
+            r.get("sheet_row", ""),
+            r.get("track_title", ""),
+            r.get("artist_name", ""),
+            r.get("album", ""),
+            r.get("spotify_link", ""),
+            r.get("spotify_dur_raw", r.get("spotify_dur", "")),
+        ])
+    if not not_uploaded:
+        writer.writerow(["(none — every sheet row has a matched file)"])
+
+    writer.writerow([])
+    writer.writerow(["SONGS UPLOADED BUT NOT ON SHEET"])
+    writer.writerow(NOT_ON_SHEET_COLUMNS)
+    for f in unmatched_audio:
+        writer.writerow([
+            Path(f["path"]).name,
+            f.get("path", ""),
+            f.get("duration", ""),
+            f.get("best_match_score", ""),
+        ])
+    if not unmatched_audio:
+        writer.writerow(["(none — every uploaded file matched a sheet row)"])
+
+
+def export_missing_report(
+    match_table: list[dict],
+    unmatched_audio: list[dict],
+    output_dir: Path,
+) -> Path:
+    """Write the missing/extra CSV report to *output_dir*; return its path."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = output_dir / f"duration_report_{timestamp}_MISSING_EXTRA.csv"
+
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        _write_missing_sections(fh, match_table, unmatched_audio)
+
+    logger.info("Missing/extra report: %s", path)
+    return path

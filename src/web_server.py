@@ -26,7 +26,7 @@ from flask import Flask, after_this_request, jsonify, render_template, request, 
 from .audio_scanner import AUDIO_EXTENSIONS, scan_audio_files, extract_duration
 from .matcher import match_tracks, compute_unmatched_status
 from .renamer import rename_matched_files
-from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS
+from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS, _write_missing_sections
 from .sheet_loader import load_sheet
 
 logger = logging.getLogger(__name__)
@@ -579,6 +579,32 @@ def create_app(config: dict) -> Flask:
             mimetype="text/csv",
             as_attachment=True,
             download_name=f"duration_report_{ts}.csv",
+        )
+
+    # ── Missing / extra report ─────────────────────────────────────────────────
+    # Two-section CSV: sheet rows never uploaded, and uploaded files never
+    # matched to a sheet row. Same X-Session-Id + fetch()+Blob requirement as
+    # every other session-scoped download (see downloadViaFetch in the UI).
+
+    @app.route(f"{API}/report-missing", methods=["GET"])
+    @_session
+    def download_missing_report(sess: dict) -> Any:
+        match_table = sess.get("match_table", [])
+        if not match_table:
+            return jsonify({"error": "No results yet. Run Analyse first."}), 400
+        audio_files = sess.get("audio_files", [])
+        unmatched_audio = [f for f in audio_files if not f.get("used")]
+        compute_unmatched_status(unmatched_audio, match_table)
+
+        output = io.StringIO()
+        _write_missing_sections(output, match_table, unmatched_audio)
+        output.seek(0)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return send_file(
+            io.BytesIO(output.read().encode("utf-8")),
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name=f"missing_extra_{ts}.csv",
         )
 
     # ── Rename formats list ───────────────────────────────────────────────────

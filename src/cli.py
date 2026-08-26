@@ -12,7 +12,7 @@ from rich.console import Console
 
 from .audio_scanner import scan_audio_files
 from .matcher import match_tracks, compute_unmatched_status
-from .reporter import print_rich_table, export_csv_report
+from .reporter import print_rich_table, export_csv_report, export_missing_report
 from .renamer import rename_matched_files
 from .sheet_loader import load_sheet, write_back_to_sheet
 
@@ -178,6 +178,8 @@ def main(
         write_back_to_sheet(gsheet_obj, match_table)
 
     export_csv_report(match_table, eff_output)
+    missing_path = export_missing_report(match_table, unmatched_audio, eff_output)
+    console.print(f"[green]Missing/extra report:[/green] {missing_path}")
     console.print("[green]Done.[/green]")
 
 
