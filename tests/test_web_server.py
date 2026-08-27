@@ -771,3 +771,57 @@ class TestFilterAndReSync:
         unmatched_paths = [f["path"] for f in body["unmatched_files"]]
         assert str(Path("/music/a.mp3")) not in unmatched_paths
         assert str(Path("/music/b.mp3")) in unmatched_paths
+
+
+class TestUnassign:
+    """Deselect: clear a matched row back to UNMATCHED so its file returns
+    to the Extra Uploaded list and the row returns to Not Uploaded."""
+
+    def test_unassign_clears_row_and_returns_file_to_extra(self, client):
+        from src.web_server import _store
+
+        sess = _store.get_or_create("unassign-session-test")
+        sess["audio_files"] = [
+            {"path": str(Path("/music/a.mp3")), "filename": "a.mp3", "duration": 100.0, "used": True},
+        ]
+        sess["match_table"] = [
+            {"sheet_row": 3, "track_title": "Track 1", "artist_name": "Artist 1",
+             "spotify_dur": 100.0, "matched_file": str(Path("/music/a.mp3")),
+             "file_dur": 100.0, "diff": 0.0, "flag_gt1s": False,
+             "status": "MANUAL", "match_score": 0.0},
+        ]
+        sess["audio_dir"] = "/music"
+
+        r = client.post("/api/unassign", headers={"X-Session-Id": "unassign-session-test"},
+                         json={"sheet_row": 3})
+
+        assert r.status_code == 200
+        body = r.get_json()
+        row = body["results"][0]
+        assert row["matched_file"] is None
+        assert row["matched_filename"] is None
+        assert row["file_dur"] is None
+        assert row["status"] == "UNMATCHED"
+        unmatched_paths = [f["path"] for f in body["unmatched_files"]]
+        assert str(Path("/music/a.mp3")) in unmatched_paths
+
+    def test_unassign_missing_sheet_row_field_returns_400(self, client, auth_headers):
+        r = client.post("/api/unassign", headers=auth_headers, json={})
+        assert r.status_code == 400
+
+    def test_unassign_unknown_row_returns_404(self, client):
+        from src.web_server import _store
+        sess = _store.get_or_create("unassign-unknown-row-session")
+        sess["match_table"] = [
+            {"sheet_row": 3, "track_title": "Track 1", "artist_name": "Artist 1",
+             "matched_file": None, "status": "UNMATCHED"},
+        ]
+        r = client.post("/api/unassign", headers={"X-Session-Id": "unassign-unknown-row-session"},
+                         json={"sheet_row": 999})
+        assert r.status_code == 404
+
+    def test_unassign_with_no_analysis_yet(self, client):
+        fresh = {"X-Session-Id": "unassign-fresh-session"}
+        r = client.post("/api/unassign", headers=fresh, json={"sheet_row": 3})
+        # No match_table at all -> row not found -> 404, not a crash
+        assert r.status_code == 404

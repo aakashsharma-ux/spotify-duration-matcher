@@ -380,6 +380,51 @@ def create_app(config: dict) -> Flask:
             "unmatched_files": _serialise_audio(unmatched_audio),
         })
 
+    # ── Unassign (deselect) a sheet row's matched file ──────────────────────────
+    # Clears a row back to UNMATCHED so the file returns to the Extra Uploaded
+    # list and the row returns to Not Uploaded. Same response shape as
+    # reassign/assign-unmatched so the UI can re-render with renderResults().
+
+    @app.route(f"{API}/unassign", methods=["POST"])
+    @_session
+    def unassign(sess: dict) -> Any:
+        data      = request.get_json(force=True, silent=True) or {}
+        sheet_row = data.get("sheet_row")
+        if sheet_row is None:
+            return jsonify({"error": "sheet_row is required."}), 400
+
+        match_table = sess.get("match_table", [])
+        found = False
+        for row in match_table:
+            if row["sheet_row"] == sheet_row:
+                row.update({
+                    "matched_file": None,
+                    "file_dur":     None,
+                    "diff":         None,
+                    "flag_gt1s":    False,
+                    "status":       "UNMATCHED",
+                    "match_score":  0.0,
+                })
+                found = True
+                break
+        if not found:
+            return jsonify({"error": f"Sheet row {sheet_row} not found."}), 404
+        sess["match_table"] = match_table
+
+        audio_files = sess.get("audio_files", [])
+        matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
+        for af in audio_files:
+            af["used"] = af["path"] in matched_paths
+        sess["audio_files"] = audio_files
+
+        unmatched_audio = [f for f in audio_files if not f.get("used")]
+        unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
+
+        return jsonify({
+            "results":         _serialise(match_table),
+            "unmatched_files": _serialise_audio(unmatched_audio),
+        })
+
     # ── Assign unmatched audio file to a sheet row ────────────────────────────
 
     @app.route(f"{API}/assign-unmatched", methods=["POST"])

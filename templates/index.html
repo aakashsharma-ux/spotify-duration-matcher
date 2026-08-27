@@ -115,6 +115,8 @@ input[type=range]{flex:1;accent-color:var(--green);cursor:pointer}
 .btn-d{background:var(--red);color:#fff}
 .btn-full{width:100%}
 .btn-sm{padding:4px 8px;font-size:10px}
+.row-actions{display:flex;gap:5px;align-items:center}
+.btn-unassign:hover:not(:disabled){border-color:var(--red);background:rgba(255,69,58,0.15);color:var(--red)}
 .br{display:flex;gap:7px}
 .br .btn{flex:1;min-width:0;font-size:11px;padding:5px 6px}
 .ar{display:flex;gap:7px}
@@ -178,20 +180,10 @@ tbody td{padding:10px 14px;vertical-align:middle}
   display:block;cursor:pointer;transition:color .15s}
 .fn:hover{color:var(--green);text-decoration:underline}
 
-/* Unmatched files section */
-.unm-section{margin-top:4px}
-.unm-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
-  background:rgba(24,24,24,0.5);border:1px solid rgba(255,255,255,0.06);border-radius:8px;
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  box-shadow:0 4px 16px rgba(0,0,0,0.35);
-  cursor:pointer;user-select:none;transition:background .15s}
-.unm-head:hover{background:rgba(40,40,40,0.6)}
-.unm-title{font-size:12.5px;font-weight:700;flex:1;letter-spacing:-0.2px}
-.unm-count{font-family:var(--mono);font-size:11px;font-weight:700;color:#000;
-  background:var(--green);padding:2px 8px;border-radius:10px}
-.unm-body{border:1px solid rgba(255,255,255,0.06);border-top:none;
+/* Extra-uploaded tab rows (rendered inside results-area) */
+.unm-body{border:1px solid rgba(255,255,255,0.06);
   background:rgba(24,24,24,0.5);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  border-radius:0 0 8px 8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+  border-radius:8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
 .unm-row{display:flex;align-items:center;gap:12px;padding:10px 18px;
   border-bottom:1px solid rgba(255,255,255,0.05);background:transparent}
 .unm-row:last-child{border-bottom:none}
@@ -414,7 +406,7 @@ tbody td{padding:10px 14px;vertical-align:middle}
       <div class="pill p-warn" data-filter="unmatched" title="On the sheet, but no file has been uploaded for it">
         <div><div class="pn" id="s-unmatched">0</div><div class="pl">Not Uploaded</div></div>
       </div>
-      <div class="pill p-warn" id="pill-not-on-sheet" title="Uploaded, but doesn't match any row on the sheet">
+      <div class="pill p-warn" data-filter="extra" title="Uploaded, but doesn't match any row on the sheet">
         <div><div class="pn" id="s-not-on-sheet">0</div><div class="pl">Extra Uploaded</div></div>
       </div>
     </div>
@@ -424,16 +416,6 @@ tbody td{padding:10px 14px;vertical-align:middle}
     <!-- Results table -->
     <div id="results-area" style="flex:1">
       <div class="empty"><div class="ei">🎵</div><p>Results appear here after analysis.</p></div>
-    </div>
-
-    <!-- Unmatched audio files -->
-    <div class="unm-section" id="unm-section" style="display:none">
-      <div class="unm-head" id="unm-toggle">
-        <span class="unm-title">🎵 Extra Uploaded Files (not on the sheet)</span>
-        <span class="unm-count" id="unm-count">0</span>
-        <span id="unm-chevron" style="color:var(--dim);font-size:11px">▼</span>
-      </div>
-      <div id="unm-body" class="unm-body" style="display:none"></div>
     </div>
 
   </main>
@@ -461,6 +443,9 @@ tbody td{padding:10px 14px;vertical-align:middle}
       <button class="btn btn-s btn-sm" id="btn-close-rov">✕</button></div>
     <div class="pb">
       <p class="pt" id="rov-track"></p>
+      <button class="btn btn-s btn-sm btn-full btn-unassign" id="btn-remove-current" style="display:none;margin-bottom:10px">
+        ✕ Remove current selection
+      </button>
       <ul class="cl" id="cand-list"></ul>
       <p id="cand-empty" style="display:none;color:var(--faint);font-size:12px">No candidates found.</p>
     </div>
@@ -567,6 +552,7 @@ function cntFor(f) {
   if (f==='matched')    return allResults.filter(r=>!!r.matched_file && !effFlag(r)).length;
   if (f==='mismatched') return allResults.filter(r=>!!r.matched_file && effFlag(r)).length;
   if (f==='unmatched')  return allResults.filter(r=>!r.matched_file).length;
+  if (f==='extra')      return unmatchedAudio.length;
   return 0;
 }
 function applyFilter(rows) {
@@ -607,6 +593,10 @@ const COLUMNS = [
 ];
 
 function renderTable() {
+  if (activeFilter === 'extra') {
+    renderExtraTab();
+    return;
+  }
   renderTableStructure();
   updateTableBody();
 }
@@ -771,30 +761,36 @@ function updateTableBody() {
       <td><span class="acc ${accClass(score)}">${score}%</span></td>
       <td>${sBadge(r)}</td>
       <td><span class="fn" title="${esc(fp)}" data-fp="${esc(fp)}">${esc(fname)}</span></td>
-      <td><button class="btn btn-s btn-sm btn-ra" data-row="${r.sheet_row}"
-            data-title="${esc(r.track_title)}" data-artist="${esc(r.artist_name)}">✏</button></td>`;
+      <td class="row-actions">
+        <button class="btn btn-s btn-sm btn-ra" data-row="${r.sheet_row}"
+              data-title="${esc(r.track_title)}" data-artist="${esc(r.artist_name)}"
+              data-has-file="${fp ? '1' : ''}" title="Reassign to a different file">✏</button>
+        ${fp ? `<button class="btn btn-s btn-sm btn-unassign" data-row="${r.sheet_row}" title="Deselect this file">✕</button>` : ''}
+      </td>`;
     tbody.appendChild(tr);
   });
 
   tbody.querySelectorAll('.fn').forEach(c => c.addEventListener('click', () => showFileModal(c.dataset.fp)));
   tbody.querySelectorAll('.btn-ra').forEach(b => b.addEventListener('click', () =>
-    openReassign(+b.dataset.row, b.dataset.title, b.dataset.artist)));
+    openReassign(+b.dataset.row, b.dataset.title, b.dataset.artist, !!b.dataset.hasFile)));
+  tbody.querySelectorAll('.btn-unassign').forEach(b => b.addEventListener('click', () =>
+    doUnassign(+b.dataset.row)));
 }
 
-/* ── Unmatched audio section ────────────────────────────────────────── */
-function renderUnmatched(files) {
-  unmatchedAudio = files;
-  const sec=$('unm-section');
-  $('unm-count').textContent=files.length;
-  sec.style.display = files.length ? 'block' : 'none';
+/* ── Extra Uploaded tab (files with no matching sheet row) ────────────── */
+function renderExtraTab() {
+  const area = $('results-area');
+  area.innerHTML = '';
 
-  const body=$('unm-body');
-  if (!files.length) { body.innerHTML=''; return; }
+  if (!unmatchedAudio.length) {
+    area.innerHTML = '<div class="empty"><div class="ei">✅</div>' +
+      '<p>No extra files — every uploaded file matched a sheet row.</p></div>';
+    return;
+  }
 
-  if (!files.length) { body.innerHTML='<div class="unm-empty">All audio files were matched.</div>'; return; }
-
-  body.innerHTML='';
-  files.forEach(f=>{
+  const wrap = document.createElement('div');
+  wrap.className = 'unm-body';
+  unmatchedAudio.forEach(f => {
     const row=document.createElement('div');
     row.className='unm-row';
     const isNotInCsv = f.match_status === 'NOT_IN_CSV';
@@ -808,8 +804,9 @@ function renderUnmatched(files) {
       <button class="btn btn-s btn-sm btn-assign"
         data-path="${esc(f.path)}" data-fname="${esc(f.filename)}">Assign ›</button>`;
     row.querySelector('.btn-assign').addEventListener('click', ()=>openAssign(f.path, f.filename));
-    body.appendChild(row);
+    wrap.appendChild(row);
   });
+  area.appendChild(wrap);
 }
 
 function fmtDurPlain(sec) {
@@ -818,18 +815,10 @@ function fmtDurPlain(sec) {
   return `${m}:${String(s).padStart(2,'0')}`;
 }
 
-/* Toggle unmatched section */
-$('unm-toggle').addEventListener('click',()=>{
-  const body=$('unm-body');
-  const open=body.style.display!=='none';
-  body.style.display=open?'none':'block';
-  $('unm-chevron').textContent=open?'▼':'▲';
-});
-
 /* ── Full render ────────────────────────────────────────────────────── */
 function renderResults(data) {
   allResults = data.results || [];
-  renderUnmatched(data.unmatched_files || []);
+  unmatchedAudio = data.unmatched_files || [];
   renderSummary();
   setFilter(activeFilter);
 }
@@ -874,15 +863,6 @@ $('fmt-select').addEventListener('change',function(){
 
 /* ── Filter pills & tabs ────────────────────────────────────────────── */
 document.querySelectorAll('.pill[data-filter]').forEach(p=>p.addEventListener('click',()=>setFilter(p.dataset.filter)));
-
-/* "Not on Sheet" pill isn't a table filter — it opens the section below
-   that lists uploaded files with no matching sheet row. */
-$('pill-not-on-sheet').addEventListener('click', () => {
-  const body = $('unm-body');
-  body.style.display = 'block';
-  $('unm-chevron').textContent = '▲';
-  $('unm-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
-});
 
 /* ── Audio browse + upload ──────────────────────────────────────────── */
 const fif=$('fi-folder'),fii=$('fi-files');
@@ -1200,9 +1180,10 @@ $('btn-copy').addEventListener('click',()=>{
 });
 
 /* ── Reassign overlay ───────────────────────────────────────────────── */
-async function openReassign(row,title,artist){
+async function openReassign(row,title,artist,hasFile){
   activeReassignRow=row;
   $('rov-track').textContent=`${title}  ·  ${artist}`;
+  $('btn-remove-current').style.display = hasFile ? 'block' : 'none';
   $('cand-list').innerHTML='<li style="color:var(--faint);font-size:12px;padding:8px 0">Searching…</li>';
   $('cand-empty').style.display='none';$('rov').style.display='flex';
   try{
@@ -1230,8 +1211,25 @@ async function doReassign(fp){
   }catch(e){setStatus('Reassign failed: '+e.message);}
   finally{$('spinner').style.display='none'}
 }
+$('btn-remove-current').addEventListener('click',()=>{
+  $('rov').style.display='none';
+  doUnassign(activeReassignRow);
+});
 $('btn-close-rov').addEventListener('click',()=>$('rov').style.display='none');
 $('rov').addEventListener('click',e=>{if(e.target===$('rov'))$('rov').style.display='none'});
+
+/* ── Unassign (deselect) a matched file ───────────────────────────────── */
+async function doUnassign(row){
+  setStatus('Removing selection…',true);
+  try{
+    const res=await fetch('/api/unassign',{method:'POST',headers:{...H,'Content-Type':'application/json'},
+      body:JSON.stringify({sheet_row:row})});
+    const data=await res.json();
+    if(data.error){setStatus('Unassign error: '+data.error);return}
+    renderResults(data);setStatus('Selection removed.');
+  }catch(e){setStatus('Unassign failed: '+e.message);}
+  finally{$('spinner').style.display='none'}
+}
 
 /* ── Assign unmatched ───────────────────────────────────────────────── */
 function openAssign(path, fname){
