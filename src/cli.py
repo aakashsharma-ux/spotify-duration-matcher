@@ -13,7 +13,7 @@ from rich.console import Console
 from .audio_scanner import scan_audio_files
 from .dedupe import find_duplicate_groups, build_duplicate_map, remap_duplicate_map, DEFAULT_DUPLICATE_THRESHOLD
 from .matcher import match_tracks, compute_unmatched_status
-from .reporter import print_rich_table, export_csv_report, export_missing_report
+from .reporter import print_rich_table, export_csv_report, export_missing_report, export_updated_info_csv
 from .renamer import rename_matched_files
 from .sheet_loader import load_sheet, write_back_to_sheet
 
@@ -217,6 +217,17 @@ def main(
     export_csv_report(match_table, eff_output, dup_map)
     missing_path = export_missing_report(match_table, unmatched_audio, eff_output, dup_map)
     console.print(f"[green]Missing/extra report:[/green] {missing_path}")
+
+    # "Updated info csv": a drop-in replacement for the ORIGINAL uploaded
+    # CSV -- same banner, same header, same columns in the same order --
+    # with only the duration/diff/flag cells corrected. Only makes sense
+    # when there was an actual CSV to use as a template; for --sheet mode
+    # the equivalent is --write-sheet writing straight back to the live
+    # sheet, so there's nothing to export here.
+    if csv_path:
+        updated_info_path = export_updated_info_csv(csv_path, match_table, eff_output)
+        console.print(f"[green]Updated info CSV:[/green] {updated_info_path}")
+
     console.print("[green]Done.[/green]")
 
 

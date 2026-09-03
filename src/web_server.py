@@ -27,7 +27,10 @@ from .audio_scanner import AUDIO_EXTENSIONS, scan_audio_files, extract_duration
 from .dedupe import find_duplicate_groups, build_duplicate_map, remap_duplicate_map, DEFAULT_DUPLICATE_THRESHOLD
 from .matcher import match_tracks, compute_unmatched_status
 from .renamer import rename_matched_files
-from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS, _write_missing_sections
+from .reporter import (
+    export_csv_report, _row_to_csv_dict, CSV_COLUMNS, _write_missing_sections,
+    read_raw_csv_template, build_updated_info_rows,
+)
 from .sheet_loader import load_sheet
 
 logger = logging.getLogger(__name__)
@@ -303,6 +306,15 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": f"audio_dir does not exist: {audio_dir}"}), 400
         try:
             sheet_rows, _ = load_sheet(csv_path=tmp.name, sheet_id=None)
+            # Keep a full column-for-column copy of the ORIGINAL file (every
+            # column, not just the ones load_sheet extracts) so the "Updated
+            # info csv" download can later reproduce it exactly, patching in
+            # only the duration/diff/flag cells. Must happen before the temp
+            # file is deleted in `finally` below.
+            banner, header, raw_rows = read_raw_csv_template(tmp.name)
+            sess["orig_csv_banner"] = banner
+            sess["orig_csv_header"] = header
+            sess["orig_csv_rows"]   = raw_rows
         except Exception as exc:
             return jsonify({"error": f"CSV parse failed: {exc}"}), 500
         finally:
@@ -341,6 +353,14 @@ def create_app(config: dict) -> Flask:
             return jsonify({"error": f"Sheet load failed: {exc}"}), 500
         if not sheet_rows:
             return jsonify({"error": "Sheet has no data rows."}), 400
+        # No original CSV exists in Sheet-ID mode, so the "Updated info csv"
+        # download has nothing to template from. Explicitly clear any
+        # left-over template from an earlier CSV-based analyse call in this
+        # SAME session — otherwise a stale template could get served
+        # against a completely different sheet's results.
+        sess["orig_csv_banner"] = None
+        sess["orig_csv_header"] = None
+        sess["orig_csv_rows"]   = None
         return jsonify(_run_analysis(sheet_rows, audio_dir, recursive,
                                      threshold, tolerance, use_microsec, sess, dupe_threshold))
 
@@ -683,6 +703,46 @@ def create_app(config: dict) -> Flask:
             mimetype="text/csv",
             as_attachment=True,
             download_name=f"missing_extra_{ts}.csv",
+        )
+
+    # ── Updated info csv ─────────────────────────────────────────────────────
+    # A drop-in replacement for the ORIGINALLY UPLOADED CSV: same banner, same
+    # header row, same columns in the same order — including every column
+    # this tool has no idea about — with only "track duration file",
+    # "difference" and ">1s difference?" patched in place by column NAME.
+    # Only available after a CSV-based analyse (not a Google Sheet ID), since
+    # that's the only case with an original file to use as a template.
+
+    @app.route(f"{API}/report-updated-info", methods=["GET"])
+    @_session
+    def download_updated_info_report(sess: dict) -> Any:
+        match_table = sess.get("match_table", [])
+        if not match_table:
+            return jsonify({"error": "No results yet. Run Analyse first."}), 400
+        header = sess.get("orig_csv_header")
+        raw_rows = sess.get("orig_csv_rows")
+        if not header or raw_rows is None:
+            return jsonify({
+                "error": "Updated info csv is only available after analysing via CSV upload "
+                         "(not a Google Sheet ID) — there's no original file to use as a template."
+            }), 400
+        banner = sess.get("orig_csv_banner") or []
+
+        data_rows = build_updated_info_rows(header, raw_rows, match_table)
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        if banner:
+            writer.writerow(banner)
+        writer.writerow(header)
+        writer.writerows(data_rows)
+        output.seek(0)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return send_file(
+            io.BytesIO(output.read().encode("utf-8")),
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name=f"updated_info_{ts}.csv",
         )
 
     # ── Rename formats list ───────────────────────────────────────────────────

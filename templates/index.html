@@ -387,6 +387,10 @@ tbody td{padding:10px 14px;vertical-align:middle}
     <button class="btn btn-s btn-full disabled" id="btn-report-missing" style="margin-top:7px">
       ⬇ Missing / Extra Report (.csv)
     </button>
+    <button class="btn btn-s btn-full disabled" id="btn-updated-info" style="margin-top:7px"
+      title="A copy of your originally uploaded CSV with duration/diff/flag columns corrected — everything else left exactly as it was">
+      ⬇ Updated Info CSV
+    </button>
     <button class="btn btn-s btn-full disabled" id="btn-download-zip" style="margin-top:7px">
       ⬇ Download Renamed Files (.zip)
     </button>
@@ -1109,6 +1113,10 @@ $('btn-report-missing').addEventListener('click', () => {
   downloadViaFetch('/api/report-missing', 'missing_extra.csv', $('btn-report-missing'));
 });
 
+$('btn-updated-info').addEventListener('click', () => {
+  downloadViaFetch('/api/report-updated-info', 'updated_info.csv', $('btn-updated-info'));
+});
+
 $('btn-download-zip').addEventListener('click', () => {
   downloadViaFetch('/api/download-renamed-zip', 'renamed_audio.zip', $('btn-download-zip'));
 });
@@ -1133,6 +1141,7 @@ $('btn-analyse').addEventListener('click',async()=>{
   $('summary').style.display='none';
   $('btn-download-zip').classList.add('disabled');
   $('btn-report-missing').classList.add('disabled');
+  $('btn-updated-info').classList.add('disabled');
   try{
     let res;
     if(csvFile){
@@ -1154,6 +1163,9 @@ $('btn-analyse').addEventListener('click',async()=>{
     $('btn-rename').disabled=false;
     $('btn-report').classList.remove('disabled');
     $('btn-report-missing').classList.remove('disabled');
+    // Updated Info CSV needs an original CSV to use as a template — only
+    // available when this analyse was a CSV upload, not a Google Sheet ID.
+    if (csvFile) $('btn-updated-info').classList.remove('disabled');
   }catch(e){setStatus('Network error: '+e.message);}
   finally{$('btn-analyse').disabled=false;$('spinner').style.display='none'}
 });

@@ -284,3 +284,153 @@ def export_missing_report(
 
     logger.info("Missing/extra report: %s", path)
     return path
+
+
+# ── "Updated info csv" ───────────────────────────────────────────────────────
+# A drop-in replacement for the originally-uploaded CSV: same banner row, same
+# header row, same columns in the same order -- including every column this
+# tool has no idea about (popularity, genres, DA workflow fields, whatever a
+# given sheet happens to carry) -- with only the duration-comparison columns
+# patched in place. Column matching is by HEADER NAME (case-insensitive,
+# whitespace-trimmed), not by fixed position, so this keeps working even if a
+# particular sheet's column layout doesn't exactly match sheet_loader.py's own
+# fixed-index assumptions for the columns it reads (track_title, artist_name,
+# album, release_date, spotify_link, spotify_duration only rely on fixed
+# positions -- everything else here goes by name).
+
+# header name (case-insensitive) -> match_table field it gets filled from.
+# Anything not listed here is copied through completely unchanged, whether or
+# not this tool recognises it.
+UPDATED_INFO_TARGETS: dict[str, str] = {
+    "track duration file": "file_dur",
+    "difference": "diff",
+    ">1s difference?": "flag_gt1s",
+}
+# Deliberately NOT in the map above, even when present in a sheet: a column
+# tracking whether something was "uploaded successfully" is, as far as this
+# tool can tell, about a separate workflow (e.g. delivery to a client/site) --
+# not about whether OUR matcher happened to find a local audio file for the
+# row. Overwriting it would conflate two different meanings of "uploaded".
+# This mirrors sheet_loader.write_back_to_sheet's own never-overwrite column.
+
+
+def read_raw_csv_template(csv_path: str) -> tuple[list[str], list[str], dict[int, list[str]]]:
+    """Read *csv_path* as a template for the Updated info csv export.
+
+    Unlike sheet_loader.load_from_csv (which extracts only the handful of
+    fields this tool understands and discards the rest), this keeps every
+    column of every row, keyed by physical row number, so the export can
+    reproduce the file exactly except for the cells it's meant to correct.
+
+    Returns (banner_row, header_row, {physical_row_num: raw_row}) where
+    physical_row_num follows the same 1=banner, 2=header, 3+=data convention
+    used everywhere else in this tool. Rows are captured verbatim, including
+    ones sheet_loader itself would skip (blank rows, rows with no title or
+    artist) -- the export should mirror the original file row-for-row.
+    """
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    banner_row: list[str] = []
+    header_row: list[str] = []
+    raw_rows: dict[int, list[str]] = {}
+
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        reader = csv.reader(fh)
+        for physical_row_num, row in enumerate(reader, start=1):
+            if physical_row_num == 1:
+                banner_row = row
+            elif physical_row_num == 2:
+                header_row = row
+            else:
+                raw_rows[physical_row_num] = row
+
+    return banner_row, header_row, raw_rows
+
+
+def _find_header_index(header: list[str], name: str) -> Optional[int]:
+    """Case-insensitive, trimmed lookup of *name* in *header*; None if absent."""
+    target = name.strip().lower()
+    for i, h in enumerate(header):
+        if h.strip().lower() == target:
+            return i
+    return None
+
+
+def _format_mmss(seconds: Optional[float]) -> str:
+    """Seconds -> "M:SS", matching the M:SS/MM:SS convention docs already use.
+
+    Minutes are not zero-padded or capped -- a 71-minute file still parses
+    fine back through sheet_loader.parse_duration's plain colon-split logic.
+    """
+    if seconds is None:
+        return ""
+    total = max(int(round(seconds)), 0)
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}:{secs:02d}"
+
+
+def build_updated_info_rows(
+    header: list[str],
+    raw_rows: dict[int, list[str]],
+    match_table: list[dict],
+) -> list[list[str]]:
+    """Overlay match_table's computed duration/diff/flag onto raw_rows.
+
+    Every row is emitted in original physical-row order. A row with a
+    match_table entry (found via its "sheet_row" physical row number) gets
+    its recognised columns patched in place by header name; every other
+    column in that row -- and every row with NO match_table entry at all
+    (blank rows, rows sheet_loader skipped for missing title/artist) -- is
+    copied through byte-for-byte unchanged.
+    """
+    col_index = {
+        field: _find_header_index(header, name)
+        for name, field in UPDATED_INFO_TARGETS.items()
+    }
+    by_sheet_row = {r["sheet_row"]: r for r in match_table if r.get("sheet_row") is not None}
+
+    out_rows: list[list[str]] = []
+    for physical_row_num in sorted(raw_rows):
+        row = list(raw_rows[physical_row_num])  # copy — never mutate the template
+        match_row = by_sheet_row.get(physical_row_num)
+        if match_row is not None:
+            for field, idx in col_index.items():
+                if idx is None:
+                    continue  # this sheet has no column by that name — nothing to fill
+                while len(row) <= idx:
+                    row.append("")  # pad short rows so the value lands in the right column
+                if field == "file_dur":
+                    row[idx] = _format_mmss(match_row.get("file_dur"))
+                elif field == "diff":
+                    diff = match_row.get("diff")
+                    row[idx] = f"{diff:.2f}" if diff is not None else ""
+                elif field == "flag_gt1s":
+                    row[idx] = "YES" if match_row.get("flag_gt1s") else ""
+        out_rows.append(row)
+    return out_rows
+
+
+def export_updated_info_csv(
+    csv_path: str,
+    match_table: list[dict],
+    output_dir: Path,
+) -> Path:
+    """CLI convenience: read the original CSV as a template, patch it, write it out."""
+    banner, header, raw_rows = read_raw_csv_template(csv_path)
+    data_rows = build_updated_info_rows(header, raw_rows, match_table)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = output_dir / f"updated_info_{timestamp}.csv"
+
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        if banner:
+            writer.writerow(banner)
+        writer.writerow(header)
+        writer.writerows(data_rows)
+
+    logger.info("Updated info CSV: %s", path)
+    return path

@@ -555,6 +555,108 @@ class TestMissingReport:
         assert "Flying High" not in not_on_sheet_section
 
 
+# ── Updated info csv ─────────────────────────────────────────────────────────
+# Drop-in replacement for the ORIGINAL uploaded CSV — same columns as the
+# real sheet the user analyses with, only the duration/diff/flag cells
+# corrected, everything else (including columns this tool never reads)
+# passed through byte-for-byte.
+
+REAL_SHEET_HEADER = [
+    "track_title", "artist_name", "album", "release_date", "popularity",
+    "genres", "styles", "country", "spotify_link", "DA NAME", "DATE",
+    "STATUS", "Site used", "# of listens", "track duration spotify",
+    "track duration file", "difference", ">1s difference?",
+    "uploaded successfully?", "issues", "notes", "ID TO USE",
+    "tool da - 17 feb", "ORIGINAL DA", "ORIGINAL DATE", "",
+    "SPOTIFY TITLE", "SPOTIFY ARTIST",
+]
+
+
+def _real_shape_csv():
+    return _make_csv_bytes([
+        ["Banner"],
+        REAL_SHEET_HEADER,
+        ["Lover", "The Troggs", "Some Album", "2020-01-01", "42", "rock",
+         "garage", "UK", "https://open.spotify.com/track/x", "Jane",
+         "2026-01-01", "done", "SPOTISAVER", "5", "3:42", "0:00", "STALE",
+         "", "YES", "", "some note", "ID1", "tool-a", "OrigDA",
+         "2025-12-01", "", "Lover", "The Troggs"],
+    ])
+
+
+class TestUpdatedInfoCsv:
+    def test_returns_400_before_analyse(self, client):
+        fresh = {"X-Session-Id": "fresh-updated-info-session"}
+        r = client.get("/api/report-updated-info", headers=fresh)
+        assert r.status_code == 400
+
+    def test_returns_400_after_sheet_id_analyse(self, client, auth_headers, monkeypatch):
+        """No original CSV exists in Sheet-ID mode — nothing to template from."""
+        from src import web_server as ws
+        monkeypatch.setattr(
+            ws, "load_sheet",
+            lambda csv_path, sheet_id, creds_file="creds.json": (
+                [{"sheet_row": 3, "track_title": "X", "artist_name": "Y",
+                  "album": "", "spotify_link": "", "spotify_dur_raw": "3:00",
+                  "spotify_dur": 180.0}],
+                None,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            client.post("/api/analyse", headers={**auth_headers, "Content-Type": "application/json"},
+                        data=json.dumps({"sheet_id": "fake123", "audio_dir": tmp}))
+            r = client.get("/api/report-updated-info", headers=auth_headers)
+        assert r.status_code == 400
+        assert "Google Sheet ID" in r.get_json()["error"]
+
+    def test_mirrors_original_header_and_banner(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            client.post("/api/analyse-csv", headers=auth_headers,
+                        data={"csv_file": (io.BytesIO(_real_shape_csv()), "s.csv"),
+                              "audio_dir": tmp},
+                        content_type="multipart/form-data")
+            r = client.get("/api/report-updated-info", headers=auth_headers)
+        assert r.status_code == 200
+        rows = list(csv.reader(io.StringIO(r.data.decode("utf-8"))))
+        assert rows[0] == ["Banner"]
+        assert rows[1] == REAL_SHEET_HEADER
+
+    def test_patches_duration_columns_and_preserves_everything_else(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "The Troggs - Lover (SPOTISAVER).mp3"
+            audio.write_bytes(b"\xff\xfb" * 50)
+            client.post("/api/analyse-csv", headers=auth_headers,
+                        data={"csv_file": (io.BytesIO(_real_shape_csv()), "s.csv"),
+                              "audio_dir": tmp},
+                        content_type="multipart/form-data")
+            r = client.get("/api/report-updated-info", headers=auth_headers)
+        rows = list(csv.reader(io.StringIO(r.data.decode("utf-8"))))
+        header, data = rows[1], rows[2]
+        idx = {name: header.index(name) for name in REAL_SHEET_HEADER if name}
+        # Untouched passthrough columns keep their ORIGINAL (now-stale) values —
+        # this endpoint never re-derives them, it only patches the 3 targets.
+        assert data[idx["popularity"]] == "42"
+        assert data[idx["DA NAME"]] == "Jane"
+        assert data[idx["ID TO USE"]] == "ID1"
+        # The protected column must survive completely untouched.
+        assert data[idx["uploaded successfully?"]] == "YES"
+        # The 3 target columns should no longer be the stale seed values.
+        assert data[idx["track duration file"]] != "0:00"
+        assert data[idx["difference"]] != "STALE"
+
+    def test_report_missing_still_works_after_updated_info_download(self, client, auth_headers):
+        """The new endpoint must not consume/mutate session state other
+        endpoints rely on."""
+        with tempfile.TemporaryDirectory() as tmp:
+            client.post("/api/analyse-csv", headers=auth_headers,
+                        data={"csv_file": (io.BytesIO(_real_shape_csv()), "s.csv"),
+                              "audio_dir": tmp},
+                        content_type="multipart/form-data")
+            client.get("/api/report-updated-info", headers=auth_headers)
+            r = client.get("/api/report-missing", headers=auth_headers)
+        assert r.status_code == 200
+
+
 # ── Assign-unmatched endpoint ─────────────────────────────────────────────────
 
 class TestAssignUnmatched:
