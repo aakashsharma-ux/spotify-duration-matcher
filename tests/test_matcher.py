@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch
-from src.matcher import match_tracks, _combined_score, _compute_diff_and_flag, UNMATCHED_LABEL
+from src.matcher import match_tracks, _combined_score, combined_score, _compute_diff_and_flag, UNMATCHED_LABEL
 
 
 def make_track(row=1, title="Test Track", artist="Test Artist", spotify_dur=222.0, spotify_dur_raw="3:42"):
@@ -33,6 +33,18 @@ class TestCombinedScore:
         s1 = _combined_score("test track", "test artist", "Test Track", "Test Artist")
         s2 = _combined_score("TEST TRACK", "TEST ARTIST", "Test Track", "Test Artist")
         assert abs(s1 - s2) < 2.0
+
+
+# ── combined_score (public wrapper) ──────────────────────────────────────────
+# Same formula as _combined_score, exposed publicly for dedupe.py to reuse.
+
+class TestCombinedScorePublicWrapper:
+    def test_matches_private_implementation(self):
+        args = ("Test Track", "Test Artist", "Test Track", "Test Artist")
+        assert combined_score(*args) == _combined_score(*args)
+
+    def test_perfect_match(self):
+        assert combined_score("Lover", "The Troggs", "Lover", "The Troggs") == pytest.approx(100.0, abs=1.0)
 
 
 # ── _compute_diff_and_flag ───────────────────────────────────────────────────

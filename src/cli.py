@@ -11,6 +11,7 @@ import yaml
 from rich.console import Console
 
 from .audio_scanner import scan_audio_files
+from .dedupe import find_duplicate_groups, build_duplicate_map, remap_duplicate_map, DEFAULT_DUPLICATE_THRESHOLD
 from .matcher import match_tracks, compute_unmatched_status
 from .reporter import print_rich_table, export_csv_report, export_missing_report
 from .renamer import rename_matched_files
@@ -41,6 +42,7 @@ def _write_default_config(path: Path) -> None:
         "rename_template": "{idx:03d} - {title} - {artist}{ext}",
         "output_dir": "./reports", "cache_db": ".duration_cache.db",
         "web_port": DEFAULT_WEB_PORT,
+        "duplicate_threshold": DEFAULT_DUPLICATE_THRESHOLD,
     }
     with path.open("w") as fh:
         _y.dump(defaults, fh, default_flow_style=False)
@@ -80,11 +82,16 @@ def _interactive_reassign(match_table: list[dict], audio_files: list[dict]) -> l
 @click.option("--output-dir", default=None)
 @click.option("--no-microseconds", is_flag=True, default=False,
               help="Compare only whole seconds (ignore sub-second differences).")
+@click.option("--dupe-threshold", default=None, type=float,
+              help="Min. weighted title/artist score (0-100) to flag two uploaded "
+                   "audio files as the same song downloaded twice. Default 90.")
+@click.option("--no-dupe-check", is_flag=True, default=False,
+              help="Skip duplicate-download detection entirely.")
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH))
 def main(
     csv_path, sheet_id, audio_dir, no_recursive, write_sheet,
     sort_rename, interactive, web, threshold, output_dir,
-    no_microseconds, config_path,
+    no_microseconds, dupe_threshold, no_dupe_check, config_path,
 ) -> None:
     """Match downloaded audio files to Google Sheet rows and compare durations."""
     cfg = _load_config(Path(config_path))
@@ -95,6 +102,7 @@ def main(
     eff_output     = Path(output_dir or cfg.get("output_dir", "./reports"))
     eff_recursive  = not no_recursive and cfg.get("recursive", True)
     eff_microsec   = not no_microseconds
+    eff_dupe_thresh= dupe_threshold if dupe_threshold is not None else cfg.get("duplicate_threshold", DEFAULT_DUPLICATE_THRESHOLD)
     creds_file     = cfg.get("credentials_file", "creds.json")
     tolerance      = cfg.get("duration_tolerance_sec", 1.0)
     rename_tpl     = cfg.get("rename_template", "{idx:03d} - {title} - {artist}{ext}")
@@ -150,20 +158,49 @@ def main(
     unmatched_audio = [f for f in audio_files if not f.get("used")]
     compute_unmatched_status(unmatched_audio, sheet_rows)
 
+    # Duplicate-download detection: same song downloaded from two sites
+    # under two different filename conventions (e.g. SpotiMate.io vs
+    # SPOTISAVER) parses to the same (artist, title) and would otherwise
+    # just look like an unexplained "unmatched" file — flag it explicitly.
+    dup_groups = [] if no_dupe_check else find_duplicate_groups(audio_files, threshold=eff_dupe_thresh)
+    dup_map = build_duplicate_map(dup_groups)
+
     print_rich_table(match_table, console)
 
     if unmatched_audio:
         console.print(f"\n[yellow]{len(unmatched_audio)} audio file(s) not matched to any sheet row.[/yellow]")
         for af in unmatched_audio:
-            if af.get("match_status") == "NOT_IN_CSV":
+            dup_info = dup_map.get(af["path"])
+            if dup_info:
+                siblings = ", ".join(Path(p).name for p in dup_info["siblings"])
+                status_str = f"[magenta]Possible duplicate of: {siblings}[/magenta]"
+            elif af.get("match_status") == "NOT_IN_CSV":
                 status_str = "[red]Not in CSV[/red]"
             else:
                 status_str = f"[orange3]No Match Found ({af.get('best_match_score', 0)}%)[/orange3]"
             console.print(f"  • {Path(af['path']).name} — {status_str}")
 
+    if dup_groups:
+        console.print(
+            f"\n[magenta]⚠ {len(dup_groups)} possible duplicate download(s) detected "
+            f"(same song, different filename format):[/magenta]"
+        )
+        for g in dup_groups:
+            console.print(f"  Group (match {g['best_score']}%):")
+            for f in g["files"]:
+                tag = "[green]kept — matched[/green]" if f["path"] in matched_paths else "[yellow]extra copy[/yellow]"
+                console.print(f"    - {Path(f['path']).name}  [{tag}]")
+
     if sort_rename:
         console.print("[cyan]Renaming files…[/cyan]")
+        old_matched_files = {r["sheet_row"]: r.get("matched_file") for r in match_table if r.get("matched_file")}
         match_table, rename_stats = rename_matched_files(match_table, rename_tpl)
+        old_to_new = {
+            old: new
+            for row in match_table
+            if (old := old_matched_files.get(row["sheet_row"])) and (new := row.get("matched_file")) and old != new
+        }
+        dup_map = remap_duplicate_map(dup_map, old_to_new)
         console.print(
             f"[green]Renamed {rename_stats['renamed']} file(s).[/green] "
             f"({rename_stats['skipped_same_name']} already correct, "
@@ -177,8 +214,8 @@ def main(
         console.print("[cyan]Writing back to sheet…[/cyan]")
         write_back_to_sheet(gsheet_obj, match_table)
 
-    export_csv_report(match_table, eff_output)
-    missing_path = export_missing_report(match_table, unmatched_audio, eff_output)
+    export_csv_report(match_table, eff_output, dup_map)
+    missing_path = export_missing_report(match_table, unmatched_audio, eff_output, dup_map)
     console.print(f"[green]Missing/extra report:[/green] {missing_path}")
     console.print("[green]Done.[/green]")
 

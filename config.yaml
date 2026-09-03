@@ -13,6 +13,14 @@ recursive: true                 # true = scan subdirectories
 match_threshold: 55             # 0–100; below this score → UNMATCHED
 duration_tolerance_sec: 1.0    # seconds; above this → col S = "YES"
 
+# Duplicate-download detection — flags audio files that look like the same
+# song downloaded twice under different site naming conventions (e.g.
+# "SpotiMate.io - Lover - The Troggs.mp3" vs "The Troggs - Lover
+# (SPOTISAVER).mp3"). Deliberately much stricter than match_threshold above,
+# since calling two files duplicates is a stronger claim than matching a
+# file to a sheet row.
+duplicate_threshold: 90         # 0–100; weighted title/artist score to flag as dupes
+
 # Rename template (Python format string)
 # Available keys: idx (int), artist (str), title (str), ext (str with dot)
 rename_template: "{idx:03d} - {title} - {artist}{ext}"

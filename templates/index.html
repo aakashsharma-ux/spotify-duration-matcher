@@ -15,6 +15,7 @@
   --red:#f25c54;--red-g:rgba(242,92,84,.1);
   --amber:#f4a261;--amber-g:rgba(244,162,97,.1);
   --blue:#3a86c8;--blue-g:rgba(58,134,200,.1);
+  --purple:#b48ce0;--purple-g:rgba(180,140,224,.12);
   --text:#ffffff;--dim:#b3b3b3;--faint:#727272;
   --mono:'JetBrains Mono','Fira Code',monospace;
   --sans:'Outfit','Montserrat','Inter','Segoe UI',system-ui,sans-serif;
@@ -142,7 +143,9 @@ input[type=range]{flex:1;accent-color:var(--green);cursor:pointer}
 .pill.active{border-color:var(--green)!important;background:rgba(40,40,40,0.65)!important}
 .pn{font-family:var(--sans);font-size:28px;font-weight:800;line-height:1;letter-spacing:-0.8px}
 .pl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--dim)}
-.p-ok .pn{color:var(--green)}.p-bad .pn{color:var(--red)}.p-warn .pn{color:var(--amber)}.p-dim .pn{color:var(--dim)}
+.p-ok .pn{color:var(--green)}.p-bad .pn{color:var(--red)}.p-warn .pn{color:var(--amber)}.p-dim .pn{color:var(--dim)}.p-dup .pn{color:var(--purple)}
+.sbadge.s-dup{background:var(--purple-g);color:var(--purple)}
+.dup-note{display:block;font-size:11px;color:var(--purple);margin-top:2px}
 
 /* Table */
 .tw{overflow-x:auto;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(24,24,24,0.6);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,0.5)}
@@ -409,6 +412,9 @@ tbody td{padding:10px 14px;vertical-align:middle}
       <div class="pill p-warn" data-filter="extra" title="Uploaded, but doesn't match any row on the sheet">
         <div><div class="pn" id="s-not-on-sheet">0</div><div class="pl">Extra Uploaded</div></div>
       </div>
+      <div class="pill p-dup" id="dupes-pill" style="display:none" title="Files that look like the same song downloaded twice under different filenames">
+        <div><div class="pn" id="s-dupes">0</div><div class="pl">Possible Dupes</div></div>
+      </div>
     </div>
 
 
@@ -480,6 +486,7 @@ const H = { 'X-Session-Id': SID };
 /* ── State ──────────────────────────────────────────────────────────── */
 let allResults   = [];
 let unmatchedAudio = [];
+let duplicateGroups = [];
 let activeFilter = 'all';
 let activeReassignRow = null;
 let pendingAssignFile = null;
@@ -542,7 +549,12 @@ function rowClass(r) {
 }
 function sBadge(r) {
   const map={OK:'s-ok',MISMATCH:'s-mis',UNMATCHED:'s-unm',MANUAL:'s-man',READ_ERROR:'s-err',INFO_ONLY:'s-inf'};
-  return `<span class="sbadge ${map[r.status]||'s-inf'}">${esc(r.status)}</span>`;
+  let html = `<span class="sbadge ${map[r.status]||'s-inf'}">${esc(r.status)}</span>`;
+  if (r.dup_group_id != null) {
+    const siblings = (r.dup_siblings||[]).join(', ');
+    html += ` <span class="sbadge s-dup" title="Also uploaded as: ${esc(siblings)}">⧉ DUP</span>`;
+  }
+  return html;
 }
 function bn(p){ return p ? p.replace(/\\/g,'/').split('/').pop() : '—'; }
 
@@ -576,6 +588,10 @@ function renderSummary() {
   $('s-unmatched').textContent=u;
   $('s-not-on-sheet').textContent = unmatchedAudio.length;
   $('summary').style.display    = 'flex';
+
+  const dupeFileCount = duplicateGroups.reduce((sum,g)=>sum+g.files.length,0);
+  $('s-dupes').textContent = dupeFileCount;
+  $('dupes-pill').style.display = dupeFileCount ? 'flex' : 'none';
 }
 
 /* ── Table render ───────────────────────────────────────────────────── */
@@ -794,9 +810,21 @@ function renderExtraTab() {
     const row=document.createElement('div');
     row.className='unm-row';
     const isNotInCsv = f.match_status === 'NOT_IN_CSV';
-    const badgeHtml = isNotInCsv
-      ? `<span class="sbadge s-mis">Not in CSV</span>`
-      : `<span class="sbadge s-unm">No Match Found (${f.best_match_score || 0}%)</span>`;
+    let badgeHtml;
+    if (f.dup_group_id != null) {
+      // This file is almost certainly the same song as an already-matched
+      // upload, just downloaded from a different site with a different
+      // filename convention. Keep the visible label short and fixed-width
+      // (the sibling filename can be long, and this row is a flex row with
+      // no room to spare at narrow widths) — the full detail goes in the
+      // tooltip instead.
+      const siblings = (f.dup_siblings||[]).join(', ');
+      badgeHtml = `<span class="sbadge s-dup" title="Same song as: ${esc(siblings)}">⧉ DUPLICATE</span>`;
+    } else if (isNotInCsv) {
+      badgeHtml = `<span class="sbadge s-mis">Not in CSV</span>`;
+    } else {
+      badgeHtml = `<span class="sbadge s-unm">No Match Found (${f.best_match_score || 0}%)</span>`;
+    }
     row.innerHTML=`
       <span class="unm-fn" title="${esc(f.path)}">${esc(f.filename)}</span>
       ${badgeHtml}
@@ -819,6 +847,11 @@ function fmtDurPlain(sec) {
 function renderResults(data) {
   allResults = data.results || [];
   unmatchedAudio = data.unmatched_files || [];
+  // duplicate_groups is only sent by the initial analyse call — reassign/
+  // unassign/rename/etc. don't recompute it (the underlying audio files and
+  // their filename-based grouping don't change), so keep the last known
+  // value on those responses instead of clobbering it with undefined.
+  if (data.duplicate_groups !== undefined) duplicateGroups = data.duplicate_groups;
   renderSummary();
   setFilter(activeFilter);
 }

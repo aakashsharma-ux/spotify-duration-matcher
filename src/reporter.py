@@ -36,6 +36,7 @@ CSV_COLUMNS = [
     "match_score",
     "status",
     "suggested_rename",
+    "duplicate_of",
 ]
 
 
@@ -132,8 +133,21 @@ def _print_summary(match_table: list[dict], console: Console) -> None:
     )
 
 
-def _row_to_csv_dict(row: dict, idx: int) -> dict:
-    """Convert a match result row to a flat CSV-ready dict."""
+def _row_to_csv_dict(row: dict, idx: int, dup_map: Optional[dict] = None) -> dict:
+    """Convert a match result row to a flat CSV-ready dict.
+
+    ``dup_map`` is the ``{path: {"group_id", "siblings": [...]}}`` lookup from
+    ``dedupe.build_duplicate_map()``. When the row's matched file is part of a
+    duplicate group, "duplicate_of" lists the sibling filename(s) so a user
+    scanning the CSV can see at a glance that another copy of this same song
+    was also uploaded (and may be worth deleting). Optional and defaults to
+    None so existing callers that don't have dedupe info keep working as-is.
+    """
+    dup_info = (dup_map or {}).get(row.get("matched_file"))
+    duplicate_of = (
+        ", ".join(Path(p).name for p in dup_info["siblings"])
+        if dup_info else ""
+    )
     return {
         "#": idx,
         "track_title": row.get("track_title", ""),
@@ -148,10 +162,15 @@ def _row_to_csv_dict(row: dict, idx: int) -> dict:
         "match_score": row.get("match_score", ""),
         "status": row.get("status", ""),
         "suggested_rename": row.get("suggested_rename", ""),
+        "duplicate_of": duplicate_of,
     }
 
 
-def export_csv_report(match_table: list[dict], output_dir: Path) -> tuple[Path, Path]:
+def export_csv_report(
+    match_table: list[dict],
+    output_dir: Path,
+    dup_map: Optional[dict] = None,
+) -> tuple[Path, Path]:
     """Write full report and mismatches-only CSV; return both paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -159,7 +178,7 @@ def export_csv_report(match_table: list[dict], output_dir: Path) -> tuple[Path, 
     full_path = output_dir / f"duration_report_{timestamp}.csv"
     mismatch_path = output_dir / f"duration_report_{timestamp}_MISMATCHES_ONLY.csv"
 
-    csv_rows = [_row_to_csv_dict(r, i + 1) for i, r in enumerate(match_table)]
+    csv_rows = [_row_to_csv_dict(r, i + 1, dup_map) for i, r in enumerate(match_table)]
     mismatch_rows = [r for r in csv_rows if r["flag_1s"] == "YES"]
 
     _write_csv(full_path, csv_rows)
@@ -190,6 +209,7 @@ NOT_UPLOADED_COLUMNS = [
 ]
 NOT_ON_SHEET_COLUMNS = [
     "filename", "full_path", "duration_sec", "closest_match_score_pct",
+    "possible_duplicate_of",
 ]
 
 
@@ -197,14 +217,21 @@ def _write_missing_sections(
     fh,
     match_table: list[dict],
     unmatched_audio: list[dict],
+    dup_map: Optional[dict] = None,
 ) -> None:
     """Write the two-section missing/extra report body to an open file handle.
 
     Section 1 lists every sheet row with no matched audio file (in the CSV
     / sheet, but never uploaded). Section 2 lists every uploaded audio file
-    that wasn't assigned to any sheet row (uploaded, but not on the sheet).
+    that wasn't assigned to any sheet row (uploaded, but not on the sheet) —
+    this is exactly where a duplicate download ends up once its sibling
+    copy has already been matched to the row, so each row also carries a
+    "possible_duplicate_of" hint from ``dedupe.build_duplicate_map()`` when
+    available. ``dup_map`` is optional and defaults to None so existing
+    callers without dedupe info keep working unchanged.
     """
     writer = csv.writer(fh)
+    dup_map = dup_map or {}
 
     not_uploaded = [r for r in match_table if not r.get("matched_file")]
     writer.writerow(["SONGS IN SHEET BUT NOT UPLOADED"])
@@ -225,11 +252,17 @@ def _write_missing_sections(
     writer.writerow(["SONGS UPLOADED BUT NOT ON SHEET"])
     writer.writerow(NOT_ON_SHEET_COLUMNS)
     for f in unmatched_audio:
+        dup_info = dup_map.get(f.get("path"))
+        possible_dupe = (
+            ", ".join(Path(p).name for p in dup_info["siblings"])
+            if dup_info else ""
+        )
         writer.writerow([
             Path(f["path"]).name,
             f.get("path", ""),
             f.get("duration", ""),
             f.get("best_match_score", ""),
+            possible_dupe,
         ])
     if not unmatched_audio:
         writer.writerow(["(none — every uploaded file matched a sheet row)"])
@@ -239,6 +272,7 @@ def export_missing_report(
     match_table: list[dict],
     unmatched_audio: list[dict],
     output_dir: Path,
+    dup_map: Optional[dict] = None,
 ) -> Path:
     """Write the missing/extra CSV report to *output_dir*; return its path."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +280,7 @@ def export_missing_report(
     path = output_dir / f"duration_report_{timestamp}_MISSING_EXTRA.csv"
 
     with path.open("w", newline="", encoding="utf-8") as fh:
-        _write_missing_sections(fh, match_table, unmatched_audio)
+        _write_missing_sections(fh, match_table, unmatched_audio, dup_map)
 
     logger.info("Missing/extra report: %s", path)
     return path

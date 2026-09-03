@@ -42,6 +42,24 @@ def _combined_score(
     return TITLE_WEIGHT * t + ARTIST_WEIGHT * a
 
 
+def combined_score(
+    title_a: str,
+    artist_a: str,
+    title_b: str,
+    artist_b: str,
+) -> float:
+    """Public wrapper around the weighted title/artist scorer.
+
+    Same formula and weights as the internal sheet-row scorer above —
+    exposed under a public name so other modules (e.g. ``dedupe.py``,
+    which scores audio-file-to-audio-file rather than audio-file-to-
+    sheet-row) can reuse it without depending on a private symbol.
+    ``_combined_score`` stays as-is so existing tests that patch it
+    directly keep working unchanged.
+    """
+    return _combined_score(title_a, artist_a, title_b, artist_b)
+
+
 def _best_score_for_file(
     audio_file: dict,
     sheet_title: str,

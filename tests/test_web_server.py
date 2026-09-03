@@ -287,6 +287,108 @@ class TestAnalyseCSV:
             assert r2.get_json()["results"] is not None
 
 
+# ── Duplicate-download detection ────────────────────────────────────────────
+# Same song, two downloader sites, two filename conventions — must be flagged
+# without breaking the ordinary matched/unmatched flow.
+
+class TestDuplicateDetection:
+    def _analyse_with_dupes(self, client, auth_headers, tmp):
+        """One matched sheet row whose audio file has a duplicate download sitting unmatched."""
+        winner = Path(tmp) / "The Troggs - Lover (SPOTISAVER).mp3"
+        winner.write_bytes(b"\xff\xfb" * 50)
+        dupe = Path(tmp) / "SpotiMate.io - Lover - The Troggs.mp3"
+        dupe.write_bytes(b"\xff\xfb" * 50)
+        csv_bytes = _make_csv_bytes([
+            ["Banner"],
+            ["track_title", "artist_name", "album", "date", "", "", "", "", "spotify_link",
+             "", "", "", "", "", "spotify_dur"],
+            ["Lover", "The Troggs", "", "", "", "", "", "", "", "", "", "", "", "", "3:42"],
+        ])
+        return client.post("/api/analyse-csv", headers=auth_headers,
+                            data={"csv_file": (io.BytesIO(csv_bytes), "s.csv"), "audio_dir": tmp},
+                            content_type="multipart/form-data")
+
+    def test_response_includes_duplicate_groups(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._analyse_with_dupes(client, auth_headers, tmp)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert "duplicate_groups" in body
+        assert len(body["duplicate_groups"]) == 1
+        assert len(body["duplicate_groups"][0]["files"]) == 2
+
+    def test_unmatched_duplicate_file_is_flagged(self, client, auth_headers):
+        """The losing copy of the greedy match should carry dup_group_id, not just NO_MATCH."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._analyse_with_dupes(client, auth_headers, tmp)
+        body = r.get_json()
+        assert len(body["unmatched_files"]) == 1
+        extra = body["unmatched_files"][0]
+        assert extra["dup_group_id"] is not None
+        assert "Lover" in extra["dup_siblings"][0]
+
+    def test_matched_row_also_carries_dup_info(self, client, auth_headers):
+        """The winning (matched) copy should also know it has a duplicate sibling."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._analyse_with_dupes(client, auth_headers, tmp)
+        body = r.get_json()
+        matched_row = body["results"][0]
+        assert matched_row["matched_file"] is not None
+        assert matched_row["dup_group_id"] is not None
+        assert len(matched_row["dup_siblings"]) == 1
+
+    def test_no_duplicates_when_only_one_copy_uploaded(self, client, auth_headers):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "The Troggs - Lover (SPOTISAVER).mp3"
+            src.write_bytes(b"\xff\xfb" * 50)
+            csv_bytes = _make_csv_bytes([
+                ["Banner"],
+                ["track_title", "artist_name", "album", "date", "", "", "", "", "spotify_link",
+                 "", "", "", "", "", "spotify_dur"],
+                ["Lover", "The Troggs", "", "", "", "", "", "", "", "", "", "", "", "", "3:42"],
+            ])
+            r = client.post("/api/analyse-csv", headers=auth_headers,
+                            data={"csv_file": (io.BytesIO(csv_bytes), "s.csv"), "audio_dir": tmp},
+                            content_type="multipart/form-data")
+        body = r.get_json()
+        assert body["duplicate_groups"] == []
+        assert body["results"][0]["dup_group_id"] is None
+
+    def test_dup_flag_survives_rename(self, client, auth_headers):
+        """Renaming changes the matched file's path — dup info must still resolve after."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._analyse_with_dupes(client, auth_headers, tmp)
+            r = client.post("/api/rename",
+                            headers={**auth_headers, "Content-Type": "application/json"},
+                            data=json.dumps({"format_name": "001 - Title - Artist"}))
+        assert r.status_code == 200
+        body = r.get_json()
+        matched_row = body["results"][0]
+        assert matched_row["dup_group_id"] is not None
+        assert len(matched_row["dup_siblings"]) == 1
+        # The unmatched copy's own path never changed, so its dup info must also still resolve.
+        assert body["unmatched_files"][0]["dup_group_id"] is not None
+
+    def test_dupe_threshold_param_is_respected(self, client, auth_headers):
+        """An impossibly strict threshold should suppress the flag entirely."""
+        with tempfile.TemporaryDirectory() as tmp:
+            winner = Path(tmp) / "The Troggs - Lover (SPOTISAVER).mp3"
+            winner.write_bytes(b"\xff\xfb" * 50)
+            dupe = Path(tmp) / "SpotiMate.io - Lover - The Troggs.mp3"
+            dupe.write_bytes(b"\xff\xfb" * 50)
+            csv_bytes = _make_csv_bytes([
+                ["Banner"],
+                ["track_title", "artist_name", "album", "date", "", "", "", "", "spotify_link",
+                 "", "", "", "", "", "spotify_dur"],
+                ["Lover", "The Troggs", "", "", "", "", "", "", "", "", "", "", "", "", "3:42"],
+            ])
+            r = client.post("/api/analyse-csv", headers=auth_headers,
+                            data={"csv_file": (io.BytesIO(csv_bytes), "s.csv"),
+                                  "audio_dir": tmp, "dupe_threshold": "101"},
+                            content_type="multipart/form-data")
+        assert r.get_json()["duplicate_groups"] == []
+
+
 # ── Rename formats ────────────────────────────────────────────────────────────
 
 class TestRenameFormats:

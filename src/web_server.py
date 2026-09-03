@@ -24,6 +24,7 @@ from typing import Any, Optional
 from flask import Flask, after_this_request, jsonify, render_template, request, send_file
 
 from .audio_scanner import AUDIO_EXTENSIONS, scan_audio_files, extract_duration
+from .dedupe import find_duplicate_groups, build_duplicate_map, remap_duplicate_map, DEFAULT_DUPLICATE_THRESHOLD
 from .matcher import match_tracks, compute_unmatched_status
 from .renamer import rename_matched_files
 from .reporter import export_csv_report, _row_to_csv_dict, CSV_COLUMNS, _write_missing_sections
@@ -177,6 +178,7 @@ def create_app(config: dict) -> Flask:
         tolerance: float,
         use_microseconds: bool,
         sess: dict,
+        dupe_threshold: float = DEFAULT_DUPLICATE_THRESHOLD,
     ) -> dict:
         """Core analysis pipeline; updates *sess* and returns JSON payload."""
         audio_files = scan_audio_files(
@@ -191,13 +193,25 @@ def create_app(config: dict) -> Flask:
             tolerance       = tolerance,
             use_microseconds= use_microseconds,
         )
+        # Duplicate-download detection runs once against the freshly-scanned
+        # audio_files (same song, two sites, two filename conventions). The
+        # resulting path -> sibling-info map is stashed on the session and
+        # reused by every later endpoint (reassign/unassign/rename/etc.) via
+        # _serialise/_serialise_audio, so a flag raised here keeps showing up
+        # no matter what the user does next — see the `rename` route for how
+        # it's kept in sync when paths change.
+        dup_groups = find_duplicate_groups(audio_files, threshold=dupe_threshold)
+        dup_map = build_duplicate_map(dup_groups)
+
         sess["match_table"] = match_table
         sess["audio_files"] = audio_files
         sess["audio_dir"]   = str(audio_dir)
+        sess["dup_map"]     = dup_map
         return {
-            "results":          _serialise(match_table),
-            "unmatched_files":  _serialise_audio(unmatched_audio),
+            "results":          _serialise(match_table, dup_map),
+            "unmatched_files":  _serialise_audio(unmatched_audio, dup_map),
             "rename_formats":   list(RENAME_FORMATS.keys()),
+            "duplicate_groups": dup_groups,
         }
 
     # ── Routes ───────────────────────────────────────────────────────────────
@@ -280,6 +294,7 @@ def create_app(config: dict) -> Flask:
         threshold      = int(request.form.get("threshold", _cfg("match_threshold", 55)))
         tolerance      = float(request.form.get("tolerance", _cfg("duration_tolerance_sec", 1.0)))
         use_microsec   = request.form.get("use_microseconds", "true").lower() == "true"
+        dupe_threshold = float(request.form.get("dupe_threshold", _cfg("duplicate_threshold", DEFAULT_DUPLICATE_THRESHOLD)))
 
         if not audio_dir_str:
             return jsonify({"error": "Provide audio_dir or upload audio files first."}), 400
@@ -296,7 +311,7 @@ def create_app(config: dict) -> Flask:
         if not sheet_rows:
             return jsonify({"error": "Sheet has no data rows."}), 400
         return jsonify(_run_analysis(sheet_rows, audio_dir, recursive,
-                                     threshold, tolerance, use_microsec, sess))
+                                     threshold, tolerance, use_microsec, sess, dupe_threshold))
 
     # ── Analyse via Sheet ID ──────────────────────────────────────────────────
 
@@ -310,6 +325,7 @@ def create_app(config: dict) -> Flask:
         threshold      = int(data.get("threshold", _cfg("match_threshold", 55)))
         tolerance      = float(data.get("tolerance", _cfg("duration_tolerance_sec", 1.0)))
         use_microsec   = data.get("use_microseconds", True)
+        dupe_threshold = float(data.get("dupe_threshold", _cfg("duplicate_threshold", DEFAULT_DUPLICATE_THRESHOLD)))
         creds_file     = _cfg("credentials_file", "creds.json")
         if not sheet_id:
             return jsonify({"error": "Provide sheet_id."}), 400
@@ -326,7 +342,7 @@ def create_app(config: dict) -> Flask:
         if not sheet_rows:
             return jsonify({"error": "Sheet has no data rows."}), 400
         return jsonify(_run_analysis(sheet_rows, audio_dir, recursive,
-                                     threshold, tolerance, use_microsec, sess))
+                                     threshold, tolerance, use_microsec, sess, dupe_threshold))
 
     # ── Reassign ──────────────────────────────────────────────────────────────
 
@@ -376,8 +392,8 @@ def create_app(config: dict) -> Flask:
         unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
 
         return jsonify({
-            "results":         _serialise(match_table),
-            "unmatched_files": _serialise_audio(unmatched_audio),
+            "results":         _serialise(match_table, sess.get("dup_map", {})),
+            "unmatched_files": _serialise_audio(unmatched_audio, sess.get("dup_map", {})),
         })
 
     # ── Unassign (deselect) a sheet row's matched file ──────────────────────────
@@ -421,8 +437,8 @@ def create_app(config: dict) -> Flask:
         unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
 
         return jsonify({
-            "results":         _serialise(match_table),
-            "unmatched_files": _serialise_audio(unmatched_audio),
+            "results":         _serialise(match_table, sess.get("dup_map", {})),
+            "unmatched_files": _serialise_audio(unmatched_audio, sess.get("dup_map", {})),
         })
 
     # ── Assign unmatched audio file to a sheet row ────────────────────────────
@@ -475,8 +491,8 @@ def create_app(config: dict) -> Flask:
         unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
 
         return jsonify({
-            "results":         _serialise(match_table),
-            "unmatched_files": _serialise_audio(unmatched_audio),
+            "results":         _serialise(match_table, sess.get("dup_map", {})),
+            "unmatched_files": _serialise_audio(unmatched_audio, sess.get("dup_map", {})),
         })
 
     # ── Rename ────────────────────────────────────────────────────────────────
@@ -508,16 +524,23 @@ def create_app(config: dict) -> Flask:
         sess["match_table"] = match_table
 
         audio_files = sess.get("audio_files", [])
+        old_to_new: dict[str, str] = {}
         for row in match_table:
             sheet_row = row.get("sheet_row")
             old_path = old_matched_files.get(sheet_row)
             new_path = row.get("matched_file")
             if old_path and new_path and old_path != new_path:
+                old_to_new[old_path] = new_path
                 for af in audio_files:
                     if af["path"] == old_path:
                         af["path"] = new_path
                         af["filename"] = os.path.basename(new_path)
                         break
+
+        # dup_map is keyed by the paths files had at scan time — remap it so
+        # lookups by the newly-renamed paths still resolve (see dedupe.remap_duplicate_map).
+        if old_to_new:
+            sess["dup_map"] = remap_duplicate_map(sess.get("dup_map", {}), old_to_new)
 
         matched_paths = {r["matched_file"] for r in match_table if r.get("matched_file")}
         for af in audio_files:
@@ -528,8 +551,8 @@ def create_app(config: dict) -> Flask:
         unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
 
         return jsonify({
-            "results":         _serialise(match_table),
-            "unmatched_files": _serialise_audio(unmatched_audio),
+            "results":         _serialise(match_table, sess.get("dup_map", {})),
+            "unmatched_files": _serialise_audio(unmatched_audio, sess.get("dup_map", {})),
             "rename_stats":    stats,
         })
 
@@ -581,11 +604,11 @@ def create_app(config: dict) -> Flask:
         target = next((r for r in match_table if r["sheet_row"] == sheet_row), None)
         if target is None:
             return jsonify({"error": "Row not found."}), 404
-        from rapidfuzz import fuzz
-        from .filename_parser import normalise, parse_filename
+        from .filename_parser import parse_filename
+        from .matcher import combined_score
         import re as _re
-        title  = normalise(target.get("track_title", ""))
-        artist = normalise(target.get("artist_name", ""))
+        title  = target.get("track_title", "")
+        artist = target.get("artist_name", "")
         scored = []
         for af in scan_audio_files(audio_dir=audio_dir, recursive=True):
             best = 0.0
@@ -593,9 +616,7 @@ def create_app(config: dict) -> Flask:
             m = _re.match(r"^(\d{1,3})[\.\s\-]+", filename)
             file_track_num = int(m.group(1)) if m else None
             for _, art_c, tit_c in parse_filename(af["path"]):
-                t = fuzz.token_sort_ratio(normalise(tit_c), title)
-                a = fuzz.token_sort_ratio(normalise(art_c), artist)
-                score = 0.6 * t + 0.4 * a
+                score = combined_score(tit_c, art_c, title, artist)
                 if file_track_num == sheet_row and score >= 30.0:
                     score = 100.0
                 best = max(best, score)
@@ -611,12 +632,13 @@ def create_app(config: dict) -> Flask:
         match_table = sess.get("match_table", [])
         if not match_table:
             return jsonify({"error": "No results yet. Run Analyse first."}), 400
+        dup_map = sess.get("dup_map", {})
         import csv
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         for i, row in enumerate(match_table):
-            writer.writerow(_row_to_csv_dict(row, i + 1))
+            writer.writerow(_row_to_csv_dict(row, i + 1, dup_map))
         output.seek(0)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return send_file(
@@ -653,7 +675,7 @@ def create_app(config: dict) -> Flask:
         unmatched_audio = compute_unmatched_status(unmatched_audio, match_table)
 
         output = io.StringIO()
-        _write_missing_sections(output, match_table, unmatched_audio)
+        _write_missing_sections(output, match_table, unmatched_audio, sess.get("dup_map", {}))
         output.seek(0)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return send_file(
@@ -714,10 +736,13 @@ def _build_renamed_zip(match_table: list[dict]) -> Optional[str]:
 
 # ── Serialisation helpers ──────────────────────────────────────────────────
 
-def _serialise(match_table: list[dict]) -> list[dict]:
+def _serialise(match_table: list[dict], dup_map: Optional[dict] = None) -> list[dict]:
     import os
-    return [
-        {
+    dup_map = dup_map or {}
+    out = []
+    for r in match_table:
+        dup_info = dup_map.get(r.get("matched_file"))
+        out.append({
             "sheet_row":       r.get("sheet_row"),
             "track_title":     r.get("track_title", ""),
             "artist_name":     r.get("artist_name", ""),
@@ -733,22 +758,33 @@ def _serialise(match_table: list[dict]) -> list[dict]:
             "match_score":     r.get("match_score", 0),
             "status":          r.get("status", ""),
             "suggested_rename":r.get("suggested_rename", ""),
-        }
-        for r in match_table
-    ]
+            # Duplicate-download flags — populated when this row's matched
+            # file was grouped by dedupe.find_duplicate_groups() with one or
+            # more other uploaded files believed to be the same song under a
+            # different filename convention. None/[] when not part of a group.
+            "dup_group_id":    dup_info["group_id"] if dup_info else None,
+            "dup_score":       dup_info["score"] if dup_info else None,
+            "dup_siblings":    [os.path.basename(p) for p in dup_info["siblings"]] if dup_info else [],
+        })
+    return out
 
 
-def _serialise_audio(audio_files: list[dict]) -> list[dict]:
+def _serialise_audio(audio_files: list[dict], dup_map: Optional[dict] = None) -> list[dict]:
     """Serialise unmatched audio files for the UI."""
     import os
-    return [
-        {
+    dup_map = dup_map or {}
+    out = []
+    for f in audio_files:
+        dup_info = dup_map.get(f["path"])
+        out.append({
             "path":     f["path"],
             "filename": os.path.basename(f["path"]),
             "duration": f.get("duration"),
             "status":   f.get("status", "OK"),
             "best_match_score": f.get("best_match_score", 0.0),
             "match_status": f.get("match_status", "NOT_IN_CSV"),
-        }
-        for f in audio_files
-    ]
+            "dup_group_id": dup_info["group_id"] if dup_info else None,
+            "dup_score":    dup_info["score"] if dup_info else None,
+            "dup_siblings": [os.path.basename(p) for p in dup_info["siblings"]] if dup_info else [],
+        })
+    return out
